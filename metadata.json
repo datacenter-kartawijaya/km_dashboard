@@ -1,0 +1,8 @@
+{
+  "name": "KARTAMANDIRI Operational Dashboard",
+  "description": "Sistem monitoring terpadu PT. KARTAWIJAYA MANDIRI untuk pengawasan proyek verifikasi & validasi Buku Tanah dan Surat Ukur di Kantor ATR BPN.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

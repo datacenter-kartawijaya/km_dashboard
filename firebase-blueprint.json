@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "Represents a physical mapping project (BPN)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "location": { "type": "string" },
+        "targetTotal": { "type": "number" },
+        "targetPerDayOperator": { "type": "number" },
+        "salaryConfig": {
+          "type": "object",
+          "properties": {
+            "priceBT": { "type": "number" },
+            "priceSU": { "type": "number" }
+          },
+          "required": ["priceBT", "priceSU"]
+        },
+        "sheetIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ownerEmail": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "location", "targetTotal", "salaryConfig", "sheetIds"]
+    },
+    "OperatorTarget": {
+      "title": "OperatorTarget",
+      "description": "Custom daily target for an operator",
+      "type": "object",
+      "properties": {
+        "targetPerDay": { "type": "number" }
+      },
+      "required": ["targetPerDay"]
+    },
+    "OperatorAllowance": {
+      "title": "OperatorAllowance",
+      "description": "Custom manual allowance/bonus for an operator",
+      "type": "object",
+      "properties": {
+        "allowance": { "type": "number" }
+      },
+      "required": ["allowance"]
+    }
+  },
+  "firestore": {
+    "projects": {
+      "schema": "Project",
+      "description": "Global projects collection"
+    },
+    "operatorTargets": {
+      "schema": "OperatorTarget",
+      "description": "Stores custom daily targets for operators indexed by operatorId"
+    },
+    "operatorAllowances": {
+      "schema": "OperatorAllowance",
+      "description": "Stores custom manual allowance/bonus for operators indexed by operatorId"
+    }
+  }
+}

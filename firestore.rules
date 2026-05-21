@@ -1,0 +1,111 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. Path Variable Hardening
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Validation Blueprints
+    function isValidProject(data) {
+      return data.keys().hasAll(['id', 'name', 'location', 'targetTotal', 'salaryConfig', 'sheetIds']) &&
+             data.id is string && data.id.size() <= 100 &&
+             data.name is string && data.name.size() <= 200 &&
+             data.location is string && data.location.size() <= 200 &&
+             data.targetTotal is number && data.targetTotal >= 0 &&
+             (!data.keys().hasAny(['targetPerDayOperator']) || (data.targetPerDayOperator is number && data.targetPerDayOperator >= 0)) &&
+             data.salaryConfig is map &&
+             data.salaryConfig.priceBT is number &&
+             data.salaryConfig.priceSU is number &&
+             data.sheetIds is list &&
+             data.sheetIds.size() <= 20 &&
+             (data.sheetIds.size() == 0 || data.sheetIds[0] is string);
+    }
+
+    match /projects/{projectId} {
+      // 8. Secure List Queries
+      allow list: if true; 
+      allow get: if isValidId(projectId);
+
+      allow create: if isSignedIn() && 
+                    isValidId(projectId) && 
+                    isValidProject(incoming()) &&
+                    (incoming().ownerEmail == request.auth.token.email || incoming().ownerEmail == 'system' || incoming().ownerEmail == 'anonymous') &&
+                    incoming().createdAt == request.time;
+
+      allow update: if isSignedIn() &&
+                    isValidId(projectId) &&
+                    isValidProject(incoming()) &&
+                    incoming().ownerEmail == existing().ownerEmail &&
+                    incoming().createdAt == existing().createdAt &&
+                    (
+                      // Action: General Update
+                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'location', 'targetTotal', 'targetPerDayOperator', 'salaryConfig', 'sheetIds', 'updatedAt'])
+                    ) &&
+                    incoming().updatedAt == request.time;
+
+      allow delete: if isSignedIn() && isValidId(projectId);
+    }
+
+    match /operatorTargets/{operatorId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && isValidId(operatorId);
+
+      allow create: if isSignedIn() &&
+                    isValidId(operatorId) &&
+                    incoming().keys().hasAll(['targetPerDay']) &&
+                    incoming().keys().size() == 1 &&
+                    incoming().targetPerDay is number &&
+                    incoming().targetPerDay >= 0;
+
+      allow update: if isSignedIn() &&
+                    isValidId(operatorId) &&
+                    incoming().keys().hasAll(['targetPerDay']) &&
+                    incoming().keys().size() == 1 &&
+                    incoming().targetPerDay is number &&
+                    incoming().targetPerDay >= 0 &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['targetPerDay']);
+
+      allow delete: if isSignedIn() && isValidId(operatorId);
+    }
+
+    match /operatorAllowances/{operatorId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && isValidId(operatorId);
+
+      allow create: if isSignedIn() &&
+                    isValidId(operatorId) &&
+                    incoming().keys().hasAll(['allowance']) &&
+                    incoming().keys().size() == 1 &&
+                    incoming().allowance is number &&
+                    incoming().allowance >= 0;
+
+      allow update: if isSignedIn() &&
+                    isValidId(operatorId) &&
+                    incoming().keys().hasAll(['allowance']) &&
+                    incoming().keys().size() == 1 &&
+                    incoming().allowance is number &&
+                    incoming().allowance >= 0 &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['allowance']);
+
+      allow delete: if isSignedIn() && isValidId(operatorId);
+    }
+  }
+}
