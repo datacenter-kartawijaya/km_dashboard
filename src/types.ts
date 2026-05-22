@@ -52,3 +52,22 @@ export interface DashboardStats {
   activePersonnel: number;
   projectBudget: number; // Total salaries to be paid
 }
+
+export type UserRole = "super_admin" | "admin" | "leader" | "bpn";
+
+export interface KMUser {
+  username: string;
+  name: string;
+  role: UserRole;
+  password?: string;
+  projectId?: string; // If set, user only has access to this project
+}
+
+export interface KMDatabaseBackup {
+  version: number;
+  exportedAt: string;
+  projects: Project[];
+  operatorTargets: Record<string, number>;
+  users: KMUser[];
+}
+

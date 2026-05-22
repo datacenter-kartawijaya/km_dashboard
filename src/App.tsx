@@ -26,7 +26,8 @@ import {
   Menu,
   X,
   LogOut,
-  LogIn
+  LogIn,
+  Shield
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -45,14 +46,14 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 import { PROJECTS as INITIAL_PROJECTS, fetchAllSheetsData } from './services/dataService';
-import { Shift, Status, OperatorRecord, Project } from './types';
+import { Shift, Status, OperatorRecord, Project, KMUser, KMDatabaseBackup, UserRole } from './types';
 import { ProjectModal } from './components/ProjectModal';
 import { OperatorModal } from './components/OperatorModal';
+import { LoginScreen } from './components/LoginScreen';
+import { UserManagementModal } from './components/UserManagementModal';
 import { 
   db, 
-  auth, 
-  loginWithGoogle, 
-  logout 
+  auth 
 } from './lib/firebase';
 import { 
   collection, 
@@ -67,7 +68,35 @@ import {
   serverTimestamp,
   Timestamp
 } from 'firebase/firestore';
-import { onAuthStateChanged, User } from 'firebase/auth';
+
+const DEFAULT_USERS: KMUser[] = [
+  {
+    username: 'admin',
+    name: 'Super Admin KM',
+    role: 'super_admin',
+    password: 'km1234',
+  },
+  {
+    username: 'admin_utama',
+    name: 'Admin Utama KM',
+    role: 'admin',
+    password: 'admin',
+  },
+  {
+    username: 'leader_malang',
+    name: 'Leader BPN Malang',
+    role: 'leader',
+    password: 'km',
+    projectId: 'bpn-kab-malang',
+  },
+  {
+    username: 'bpn_malang',
+    name: 'BPN Kabupaten Malang (Viewer)',
+    role: 'bpn',
+    password: 'bpn',
+    projectId: 'bpn-kab-malang',
+  }
+];
 
 enum OperationType {
   CREATE = 'create',
@@ -85,8 +114,6 @@ interface FirestoreErrorInfo {
   authInfo: {
     userId?: string | null;
     email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
   }
 }
 
@@ -96,8 +123,6 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
     },
     operationType,
     path
@@ -113,7 +138,26 @@ function cn(...inputs: ClassValue[]) {
 const COLORS = ['#28B8A6', '#10B981', '#F59E0B', '#EF4444'];
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [kmUser, setKmUser] = useState<KMUser | null>(() => {
+    const saved = localStorage.getItem('km_auth_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [users, setUsers] = useState<KMUser[]>(() => {
+    const saved = localStorage.getItem('km_users');
+    return saved ? JSON.parse(saved) : DEFAULT_USERS;
+  });
+  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
+
+  const handleLogout = () => {
+    setKmUser(null);
+    localStorage.removeItem('km_auth_user');
+  };
+
+  const handleLoginSuccess = (usr: KMUser) => {
+    setKmUser(usr);
+    localStorage.setItem('km_auth_user', JSON.stringify(usr));
+  };
+
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [currentView, setCurrentView] = useState<'overview' | 'personnel' | 'finance'>('overview');
@@ -130,12 +174,66 @@ export default function App() {
   const [customTargets, setCustomTargets] = useState<Record<string, number>>({});
   const [personnelTab, setPersonnelTab] = useState<'matrix' | 'list'>('matrix');
   
+  // Realtime Users database sync from Firestore
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+    const q = query(collection(db, 'users'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const usersData = snapshot.docs.map(doc => ({
+        ...doc.data()
+      })) as KMUser[];
+      if (usersData.length > 0) {
+        setUsers(usersData);
+        localStorage.setItem("km_users", JSON.stringify(usersData));
+        
+        // Also keep current active session synced with current profile details (passwords, projects)
+        if (kmUser) {
+          const currentProfile = usersData.find(u => u.username === kmUser.username);
+          if (currentProfile) {
+            setKmUser(currentProfile);
+            localStorage.setItem('km_auth_user', JSON.stringify(currentProfile));
+          }
+        }
+      } else {
+        // Seed DEFAULT_USERS to Firestore
+        DEFAULT_USERS.forEach(async (usr) => {
+          try {
+            await setDoc(doc(db, 'users', usr.username), usr);
+          } catch (e) {
+            console.error("Error seeding user:", e);
+          }
+        });
+        setUsers(DEFAULT_USERS);
+        localStorage.setItem("km_users", JSON.stringify(DEFAULT_USERS));
+      }
+    }, (error) => {
+      console.warn("Firestore users syncer has warning/offline, loading locally:", error);
     });
     return () => unsubscribe();
-  }, []);
+  }, [kmUser?.username]);
+
+  // Handle saving and deleting users
+  const handleSaveUser = async (newUser: KMUser) => {
+    try {
+      await setDoc(doc(db, 'users', newUser.username), newUser);
+    } catch (e) {
+      console.warn("Firestore save user failed, writing locally:", e);
+    }
+    const updated = [...users.filter(u => u.username !== newUser.username), newUser];
+    setUsers(updated);
+    localStorage.setItem("km_users", JSON.stringify(updated));
+  };
+
+  const handleDeleteUser = async (usernameToDelete: string) => {
+    try {
+      await deleteDoc(doc(db, 'users', usernameToDelete));
+    } catch (e) {
+      console.warn("Firestore delete user failed, deleting locally:", e);
+    }
+    const updated = users.filter(usr => usr.username !== usernameToDelete);
+    setUsers(updated);
+    localStorage.setItem("km_users", JSON.stringify(updated));
+  };
+
 
   useEffect(() => {
     const q = query(collection(db, 'operatorTargets'));
@@ -211,6 +309,120 @@ export default function App() {
       }
     }
   }, [allProjects]);
+
+  // Lock project selection and restrict views depending on user permissions
+  useEffect(() => {
+    if (kmUser && kmUser.projectId) {
+      const match = allProjects.find(p => p.id === kmUser.projectId);
+      if (match) {
+        setActiveProject(match);
+      }
+      if (kmUser.role === 'bpn' && currentView === 'finance') {
+        setCurrentView('overview');
+      }
+    }
+  }, [kmUser, allProjects, currentView]);
+
+  // Export database backup to JSON file
+  const handleExportDatabase = () => {
+    const backup: KMDatabaseBackup = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      projects: allProjects,
+      operatorTargets: customTargets,
+      users: users
+    };
+    
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `km_database_backup_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Import database backup from JSON file
+  const handleImportDatabase = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const content = e.target?.result as string;
+        const backupData = JSON.parse(content) as KMDatabaseBackup;
+
+        if (!backupData.projects || !backupData.users) {
+          alert("Format file database cadangan (.json) tidak valid!");
+          return;
+        }
+
+        if (!window.confirm("Apakah Anda yakin ingin mengimpor database cadangan ini? Data proyek, target personil, dan akun akan dipulihkan.")) {
+          return;
+        }
+
+        setIsLoading(true);
+
+        // 1. Sync custom targets
+        if (backupData.operatorTargets) {
+          for (const [opId, targetVal] of Object.entries(backupData.operatorTargets)) {
+            try {
+              await setDoc(doc(db, 'operatorTargets', opId), {
+                targetPerDay: targetVal
+              });
+            } catch (err) {
+              console.warn(`Failed syncing targets to Firestore during import: ${opId}`, err);
+            }
+          }
+          setCustomTargets(backupData.operatorTargets);
+        }
+
+        // 2. Sync projects
+        for (const proj of backupData.projects) {
+          try {
+            await setDoc(doc(db, 'projects', proj.id), {
+              id: proj.id,
+              name: proj.name,
+              location: proj.location,
+              targetTotal: proj.targetTotal,
+              targetPerDayOperator: proj.targetPerDayOperator || 150,
+              sheetIds: proj.sheetIds,
+              salaryConfig: proj.salaryConfig,
+              ownerEmail: kmUser?.username || 'admin',
+              createdAt: serverTimestamp()
+            });
+          } catch (err) {
+            console.warn(`Failed syncing project to Firestore: ${proj.id}`, err);
+          }
+        }
+        setAllProjects(backupData.projects);
+
+        // 3. Sync users
+        for (const usr of backupData.users) {
+          try {
+            await setDoc(doc(db, 'users', usr.username), usr);
+          } catch (err) {
+            console.warn(`Failed syncing user ${usr.username} to Firestore:`, err);
+          }
+        }
+        setUsers(backupData.users);
+        localStorage.setItem("km_users", JSON.stringify(backupData.users));
+
+        alert("Database Berhasil Diimpor! Proyek, target, dan akun berhasil disinkronkan.");
+        loadData();
+      } catch (err) {
+        console.error("Import failed:", err);
+        alert("Gagal memproses file impor. Pastikan file JSON merupakan format cadangan KM-Dash yang benar.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    reader.readAsText(file);
+  };
+
 
   // Sync Data for ALL projects
   const loadData = async () => {
@@ -440,7 +652,7 @@ export default function App() {
           targetPerDayOperator: project.targetPerDayOperator || 150,
           sheetIds: project.sheetIds,
           salaryConfig: project.salaryConfig,
-          ownerEmail: user?.email || 'anonymous',
+          ownerEmail: kmUser?.username || 'anonymous',
           createdAt: serverTimestamp()
         });
       }
@@ -475,6 +687,13 @@ export default function App() {
     setIsOperatorModalOpen(true);
   };
 
+  const visibleProjects = useMemo(() => {
+    if (kmUser && kmUser.projectId) {
+      return allProjects.filter(p => p.id === kmUser.projectId);
+    }
+    return allProjects;
+  }, [allProjects, kmUser]);
+
   const Navigation = ({ mobile = false }: { mobile?: boolean }) => (
     <div className={cn("flex flex-col h-full", !mobile && "p-8")}>
       <div className="flex items-center gap-3 mb-10">
@@ -492,8 +711,8 @@ export default function App() {
         {[
           { id: 'overview', label: 'Monitor Proyek', icon: Activity },
           { id: 'personnel', label: 'Absensi & Kinerja', icon: Users },
-          { id: 'finance', label: 'Rekap Gaji', icon: Wallet },
-        ].map(item => (
+          kmUser && kmUser.role !== 'bpn' && { id: 'finance', label: 'Rekap Gaji', icon: Wallet },
+        ].filter(Boolean).map((item: any) => (
           <button 
             key={item.id}
             onClick={() => {
@@ -516,35 +735,39 @@ export default function App() {
       <div className="mt-12">
         <div className="flex items-center justify-between px-4 mb-4">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Daftar Proyek</p>
-          <button 
-            onClick={openAddModal}
-            className="p-1.5 hover:bg-[#28B8A6]/10 text-[#28B8A6] rounded-lg transition-colors group"
-            title="Tambah Proyek"
-          >
-            <Plus size={14} className="group-hover:scale-110 transition-transform" />
-          </button>
+          {(kmUser?.role === 'super_admin' || kmUser?.role === 'admin') && (
+            <button 
+              onClick={openAddModal}
+              className="p-1.5 hover:bg-[#28B8A6]/10 text-[#28B8A6] rounded-lg transition-colors group"
+              title="Tambah Proyek"
+            >
+              <Plus size={14} className="group-hover:scale-110 transition-transform" />
+            </button>
+          )}
         </div>
         
-        <div className="px-2 mb-2">
-          <button 
-            onClick={() => {
-              setActiveProject(null);
-              if (mobile) setIsMobileMenuOpen(false);
-            }}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all border outline-none",
-              activeProject === null 
-                ? "border-[#28B8A6] bg-[#28B8A6] text-white shadow-md shadow-[#28B8A6]/20" 
-                : "border-gray-100 text-gray-600 hover:border-[#28B8A6]"
-            )}
-          >
-            <Database size={16} />
-            Global Dashboard
-          </button>
-        </div>
+        {!kmUser?.projectId && (
+          <div className="px-2 mb-2">
+            <button 
+              onClick={() => {
+                setActiveProject(null);
+                if (mobile) setIsMobileMenuOpen(false);
+              }}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all border outline-none",
+                activeProject === null 
+                  ? "border-[#28B8A6] bg-[#28B8A6] text-white shadow-md shadow-[#28B8A6]/20" 
+                  : "border-gray-100 text-gray-600 hover:border-[#28B8A6]"
+              )}
+            >
+              <Database size={16} />
+              Global Dashboard
+            </button>
+          </div>
+        )}
 
-        <div className="space-y-2 px-2 max-h-[300px] overflow-y-auto">
-          {allProjects.map(p => (
+        <div className="space-y-2 px-2 max-h-[220px] overflow-y-auto custom-scrollbar">
+          {visibleProjects.map(p => (
             <div key={p.id} className="group relative">
               <button 
                 onClick={() => {
@@ -560,23 +783,25 @@ export default function App() {
               >
                 {p.name}
               </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openEditModal(p);
-                }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-[#28B8A6] opacity-0 group-hover:opacity-100 transition-all rounded-md hover:bg-white border-transparent hover:border-gray-100 border"
-              >
-                <div className="w-1 h-1 bg-current rounded-full mb-0.5" />
-                <div className="w-1 h-1 bg-current rounded-full mb-0.5" />
-                <div className="w-1 h-1 bg-current rounded-full" />
-              </button>
+              {(kmUser?.role === 'super_admin' || kmUser?.role === 'admin') && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openEditModal(p);
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-[#28B8A6] opacity-0 group-hover:opacity-100 transition-all rounded-md hover:bg-white border-transparent hover:border-gray-100 border"
+                >
+                  <div className="w-1 h-1 bg-current rounded-full mb-0.5" />
+                  <div className="w-1 h-1 bg-current rounded-full mb-0.5" />
+                  <div className="w-1 h-1 bg-current rounded-full" />
+                </button>
+              )}
             </div>
           ))}
         </div>
       </div>
 
-      <div className="mt-auto p-4 md:p-0">
+      <div className="mt-auto p-4 md:p-0 space-y-4">
          <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
             <div className="flex items-center justify-between gap-2 mb-3">
               <div className="flex items-center gap-2">
@@ -598,14 +823,14 @@ export default function App() {
                       {s.ok ? "OK" : "ERR"}
                     </span>
                   </div>
-                  <p className="text-[9px] font-semibold text-gray-600 leading-tight">{s.message}</p>
+                  <p className="text-[9px] font-semibold text-gray-605 leading-tight">{s.message}</p>
                 </div>
               )) : (
                 <p className="text-[9px] font-semibold text-gray-400 italic">Menunggu sinkronisasi...</p>
               )) : (
                 <div className="space-y-2">
                   <p className="text-[9px] font-bold text-gray-500 uppercase">Status Semua Proyek:</p>
-                  {allProjects.map(p => (
+                  {visibleProjects.map(p => (
                     <div key={p.id} className="flex items-center justify-between">
                       <span className="text-[9px] font-medium truncate max-w-[100px]">{p.name}</span>
                       <div className={cn("w-1.5 h-1.5 rounded-full", allSyncStatuses[p.id]?.every(s => s.ok) ? "bg-emerald-500" : "bg-red-500")} />
@@ -614,49 +839,85 @@ export default function App() {
                 </div>
               )}
             </div>
-          </div>
-       </div>
+         </div>
 
-      <div className="mt-6 pt-6 border-t border-gray-100 mb-8">
-        {user ? (
-          <div className="flex items-center justify-between bg-gray-50 p-3 rounded-xl border border-gray-100">
-            <div className="flex items-center gap-3">
-              {user.photoURL ? (
-                <img src={user.photoURL} alt={user.displayName || ''} className="w-8 h-8 rounded-full border border-gray-200" />
-              ) : (
-                <div className="w-8 h-8 bg-[#28B8A6]/10 text-[#28B8A6] rounded-full flex items-center justify-center">
-                  <UserCheck size={14} />
-                </div>
-              )}
-              <div className="min-w-0">
-                <p className="text-[10px] font-black text-gray-900 tracking-tighter truncate w-28 uppercase">
-                  {user.displayName || user.email?.split('@')[0]}
-                </p>
-                <button 
-                  onClick={() => logout()}
-                  className="text-[9px] font-black text-red-500 uppercase flex items-center gap-1 hover:underline"
-                >
-                  <LogOut size={10} /> Logout
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <button 
-            onClick={() => loginWithGoogle()}
-            className="w-full flex items-center justify-center gap-2 bg-gray-900 text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-800 transition-colors shadow-lg shadow-gray-200"
-          >
-            <LogIn size={14} /> Login Admin
-          </button>
-        )}
+         {/* Backup and restore section for admins only */}
+         {(kmUser?.role === 'super_admin' || kmUser?.role === 'admin') && (
+           <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 space-y-2">
+             <span className="text-[9px] font-black uppercase text-gray-400 tracking-widest block leading-none">Cadangan Database</span>
+             <div className="grid grid-cols-2 gap-2 text-center">
+               <button 
+                 onClick={handleExportDatabase}
+                 className="bg-white hover:bg-gray-55 border border-gray-200 py-2 rounded-lg text-[9px] font-black uppercase text-gray-650 transition-colors shadow-sm outline-none"
+                 title="Ekspor Database ke File JSON"
+               >
+                 Ekspor DB
+               </button>
+               <label 
+                 className="bg-white hover:bg-gray-55 border border-gray-200 py-2 rounded-lg text-[9px] font-black uppercase text-gray-650 transition-colors cursor-pointer text-center shadow-sm block leading-normal select-none"
+                 title="Impor Database dari File JSON"
+               >
+                 Impor DB
+                 <input 
+                   type="file" 
+                   accept=".json" 
+                   onChange={handleImportDatabase}
+                   className="hidden" 
+                 />
+               </label>
+             </div>
+           </div>
+         )}
+
+         {/* User session display */}
+         {kmUser && (
+           <div className="bg-gray-50 p-4 rounded-xl border border-gray-150 space-y-3">
+             <div className="flex items-center gap-3">
+               <div className="w-8 h-8 bg-[#28B8A6]/10 text-[#28B8A6] rounded-xl flex items-center justify-center font-bold text-xs uppercase shrink-0">
+                 {kmUser.name.charAt(0)}
+               </div>
+               <div className="min-w-0">
+                 <p className="text-[10px] font-black text-gray-950 tracking-tight leading-none truncate mb-1">
+                   {kmUser.name}
+                 </p>
+                 <span className="text-[8px] font-black uppercase bg-[#28B8A6]/15 text-[#28B8A6] px-1.5 py-0.5 rounded-md tracking-wider">
+                   {kmUser.role === 'super_admin' ? 'Super Admin' :
+                    kmUser.role === 'admin' ? 'Admin' :
+                    kmUser.role === 'leader' ? 'Leader' : 'BPN Viewer'}
+                 </span>
+               </div>
+             </div>
+
+             {(kmUser.role === 'super_admin' || kmUser.role === 'admin') && (
+               <button
+                 onClick={() => setIsUserManagementOpen(true)}
+                 className="w-full flex items-center justify-center gap-1.5 bg-white border border-gray-200 hover:border-[#28B8A6]/40 hover:bg-[#28B8A6]/5 py-2 rounded-lg text-[9px] font-black uppercase text-gray-600 hover:text-[#28B8A6] transition-all"
+               >
+                 <Shield size={11} /> Kelola Akun
+               </button>
+             )}
+
+             <button 
+               onClick={handleLogout}
+               className="w-full text-center py-2 text-[9px] font-black text-red-500 border border-red-100 bg-red-50 hover:bg-red-100/40 rounded-lg uppercase flex items-center justify-center gap-1.5 transition-colors"
+             >
+               <LogOut size={11} /> Logout
+             </button>
+           </div>
+         )}
       </div>
     </div>
   );
+
 
   const activeSelectedOperator = useMemo(() => {
     if (!selectedOperator) return null;
     return operators.find(o => o.id === selectedOperator.id) || selectedOperator;
   }, [selectedOperator, operators]);
+
+  if (kmUser === null) {
+    return <LoginScreen users={users} onLoginSuccess={handleLoginSuccess} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#F8FAFB] text-[#000000] flex font-sans relative">
@@ -724,7 +985,16 @@ export default function App() {
           isOpen={isOperatorModalOpen}
           onClose={() => setIsOperatorModalOpen(false)}
           operator={activeSelectedOperator}
-          onSaveTarget={handleSaveOperatorTarget}
+          onSaveTarget={kmUser && kmUser.role !== 'bpn' ? handleSaveOperatorTarget : undefined}
+        />
+        <UserManagementModal
+          isOpen={isUserManagementOpen}
+          onClose={() => setIsUserManagementOpen(false)}
+          users={users}
+          projects={allProjects}
+          currentUser={kmUser}
+          onSaveUser={handleSaveUser}
+          onDeleteUser={handleDeleteUser}
         />
         {/* Top Header */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -750,13 +1020,23 @@ export default function App() {
              >
                 <RefreshCw size={20} className={isLoading ? "animate-spin" : ""} />
              </button>
-             <div className="bg-[#28B8A6] text-white px-6 py-3 rounded-2xl shadow-xl shadow-[#28B8A6]/20 flex items-center gap-3 hover:scale-[1.02] transition-transform cursor-pointer">
-                <Wallet size={20} />
-                <div className="text-left">
-                  <p className="text-[10px] font-bold uppercase opacity-60 leading-none mb-1">{activeProject ? 'Budget Terpakai' : 'Total Budget'}</p>
-                  <p className="text-lg font-bold font-mono leading-none">{formatCurrency(activeStats?.projectBudget || (activeStats as any)?.totalBudget || 0)}</p>
-                </div>
-             </div>
+             {kmUser && kmUser.role !== 'bpn' ? (
+               <div className="bg-[#28B8A6] text-white px-6 py-3 rounded-2xl shadow-xl shadow-[#28B8A6]/20 flex items-center gap-3 hover:scale-[1.02] transition-transform cursor-pointer">
+                  <Wallet size={20} />
+                  <div className="text-left">
+                    <p className="text-[10px] font-bold uppercase opacity-60 leading-none mb-1">{activeProject ? 'Budget Terpakai' : 'Total Budget'}</p>
+                    <p className="text-lg font-bold font-mono leading-none">{formatCurrency(activeStats?.projectBudget || (activeStats as any)?.totalBudget || 0)}</p>
+                  </div>
+               </div>
+             ) : (
+               <div className="bg-emerald-55 border border-emerald-250 text-[#155e75] px-6 py-3 rounded-2xl flex items-center gap-3 hover:scale-[1.02] transition-transform cursor-pointer">
+                  <Activity size={20} className="text-emerald-600 animate-pulse" />
+                  <div className="text-left">
+                    <p className="text-[10px] font-black uppercase opacity-60 leading-none mb-1 text-[#22c55e]">Status Sesi</p>
+                    <p className="text-xs font-black leading-none text-emerald-800 tracking-wider">TERKONEKSI OK</p>
+                  </div>
+               </div>
+             )}
           </div>
         </header>
 
@@ -1347,7 +1627,9 @@ export default function App() {
                     <th className="px-8 py-6 col-header">Jabatan</th>
                     <th className="px-8 py-6 col-header">Status & Shift</th>
                     <th className="px-8 py-6 col-header text-right">Rekap (BT/SU)</th>
-                    <th className="px-8 py-6 col-header text-right">Etimasi Gaji</th>
+                    {kmUser && kmUser.role !== 'bpn' && (
+                      <th className="px-8 py-6 col-header text-right">Estimasi Gaji</th>
+                    )}
                     <th className="px-8 py-6 col-header">Performa (14 Hari)</th>
                   </tr>
                 </thead>
@@ -1406,9 +1688,11 @@ export default function App() {
                           <div className="text-sm font-black text-gray-900 leading-none mb-1">{(opBT * 0.6 + opSU * 0.4).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}</div>
                           <div className="text-[10px] font-bold text-gray-400 capitalize">{opBT} BT • {opSU} SU</div>
                         </td>
-                        <td className="px-8 py-6 text-right">
-                          <div className="text-sm font-mono font-black text-[#28B8A6]">{formatCurrency(opSalary)}</div>
-                        </td>
+                        {kmUser && kmUser.role !== 'bpn' && (
+                          <td className="px-8 py-6 text-right">
+                            <div className="text-sm font-mono font-black text-[#28B8A6]">{formatCurrency(opSalary)}</div>
+                          </td>
+                        )}
                         <td className="px-8 py-6">
                           <div className="flex gap-1 h-8 items-end w-36 bg-gray-50/50 p-1.5 rounded-xl border border-gray-100">
                             {op.workData.slice(-14).map((d, idx) => {
@@ -1452,7 +1736,7 @@ export default function App() {
               <p className="text-gray-400 text-xs md:text-sm leading-relaxed mb-6 font-serif">
                 Dashboard ini tersinkronisasi langsung dengan {activeProject ? activeProject.sheetIds.length : allProjects.length} Google Sheet yang dikelola oleh masing-masing Leader Proyek di lapangan. Data pembiayaan dihitung secara otomatis berdasarkan volume verifikasi berkas.
               </p>
-              {activeProject && (
+              {activeProject && kmUser && kmUser.role !== 'bpn' && (
                 <div className="flex justify-center md:justify-start gap-8">
                   <div>
                       <p className="text-[10px] font-bold uppercase tracking-widest text-[#28B8A6] mb-2">Buku Tanah (BT)</p>
