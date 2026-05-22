@@ -27,7 +27,8 @@ import {
   X,
   LogOut,
   LogIn,
-  Shield
+  Shield,
+  FileSpreadsheet
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -44,6 +45,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import * as XLSX from 'xlsx';
 
 import { PROJECTS as INITIAL_PROJECTS, fetchAllSheetsData } from './services/dataService';
 import { Shift, Status, OperatorRecord, Project, KMUser, KMDatabaseBackup, UserRole } from './types';
@@ -51,85 +53,8 @@ import { ProjectModal } from './components/ProjectModal';
 import { OperatorModal } from './components/OperatorModal';
 import { LoginScreen } from './components/LoginScreen';
 import { UserManagementModal } from './components/UserManagementModal';
-import { 
-  db, 
-  auth 
-} from './lib/firebase';
-import { 
-  collection, 
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  doc,
-  setDoc,
-  query,
-  orderBy,
-  serverTimestamp,
-  Timestamp
-} from 'firebase/firestore';
-
-const DEFAULT_USERS: KMUser[] = [
-  {
-    username: 'admin',
-    name: 'Super Admin KM',
-    role: 'super_admin',
-    password: 'km1234',
-  },
-  {
-    username: 'admin_utama',
-    name: 'Admin Utama KM',
-    role: 'admin',
-    password: 'admin',
-  },
-  {
-    username: 'leader_malang',
-    name: 'Leader BPN Malang',
-    role: 'leader',
-    password: 'km',
-    projectId: 'bpn-kab-malang',
-  },
-  {
-    username: 'bpn_malang',
-    name: 'BPN Kabupaten Malang (Viewer)',
-    role: 'bpn',
-    password: 'bpn',
-    projectId: 'bpn-kab-malang',
-  }
-];
-
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
+import { databaseService, DEFAULT_USERS } from './lib/databaseService';
+import { isSupabaseConfigured, SUPABASE_SQL_SCHEMA } from './lib/supabase';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -174,128 +99,59 @@ export default function App() {
   const [customTargets, setCustomTargets] = useState<Record<string, number>>({});
   const [personnelTab, setPersonnelTab] = useState<'matrix' | 'list'>('matrix');
   
-  // Realtime Users database sync from Firestore
+  // Synchronize Users database
   useEffect(() => {
-    const q = query(collection(db, 'users'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const usersData = snapshot.docs.map(doc => ({
-        ...doc.data()
-      })) as KMUser[];
-      if (usersData.length > 0) {
-        setUsers(usersData);
-        localStorage.setItem("km_users", JSON.stringify(usersData));
-        
-        // Also keep current active session synced with current profile details (passwords, projects)
-        if (kmUser) {
-          const currentProfile = usersData.find(u => u.username === kmUser.username);
-          if (currentProfile) {
-            setKmUser(currentProfile);
-            localStorage.setItem('km_auth_user', JSON.stringify(currentProfile));
-          }
+    const initUsers = async () => {
+      const u = await databaseService.fetchUsers();
+      setUsers(u);
+      
+      // Also keep current active session synced with current profile details (passwords, projects)
+      if (kmUser) {
+        const currentProfile = u.find(x => x.username === kmUser.username);
+        if (currentProfile) {
+          setKmUser(currentProfile);
+          localStorage.setItem('km_auth_user', JSON.stringify(currentProfile));
         }
-      } else {
-        // Seed DEFAULT_USERS to Firestore
-        DEFAULT_USERS.forEach(async (usr) => {
-          try {
-            await setDoc(doc(db, 'users', usr.username), usr);
-          } catch (e) {
-            console.error("Error seeding user:", e);
-          }
-        });
-        setUsers(DEFAULT_USERS);
-        localStorage.setItem("km_users", JSON.stringify(DEFAULT_USERS));
       }
-    }, (error) => {
-      console.warn("Firestore users syncer has warning/offline, loading locally:", error);
-    });
-    return () => unsubscribe();
+    };
+    initUsers();
   }, [kmUser?.username]);
 
   // Handle saving and deleting users
   const handleSaveUser = async (newUser: KMUser) => {
-    try {
-      await setDoc(doc(db, 'users', newUser.username), newUser);
-    } catch (e) {
-      console.warn("Firestore save user failed, writing locally:", e);
-    }
-    const updated = [...users.filter(u => u.username !== newUser.username), newUser];
-    setUsers(updated);
-    localStorage.setItem("km_users", JSON.stringify(updated));
+    await databaseService.saveUser(newUser);
+    const u = await databaseService.fetchUsers();
+    setUsers(u);
   };
 
   const handleDeleteUser = async (usernameToDelete: string) => {
-    try {
-      await deleteDoc(doc(db, 'users', usernameToDelete));
-    } catch (e) {
-      console.warn("Firestore delete user failed, deleting locally:", e);
-    }
-    const updated = users.filter(usr => usr.username !== usernameToDelete);
-    setUsers(updated);
-    localStorage.setItem("km_users", JSON.stringify(updated));
+    await databaseService.deleteUser(usernameToDelete);
+    const u = await databaseService.fetchUsers();
+    setUsers(u);
   };
 
-
+  // Synchronize custom targets
   useEffect(() => {
-    const q = query(collection(db, 'operatorTargets'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const targetsMap: Record<string, number> = {};
-      snapshot.forEach(doc => {
-        targetsMap[doc.id] = doc.data().targetPerDay;
-      });
+    const initTargets = async () => {
+      const targetsMap = await databaseService.fetchCustomTargets();
       setCustomTargets(targetsMap);
-    }, (error) => {
-      console.error("Error fetching custom targets:", error);
-    });
-    return () => unsubscribe();
+    };
+    initTargets();
   }, []);
 
   const handleSaveOperatorTarget = async (opId: string, newTarget: number) => {
-    try {
-      await setDoc(doc(db, 'operatorTargets', opId), {
-        targetPerDay: newTarget
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `operatorTargets/${opId}`);
-    }
+    await databaseService.saveOperatorTarget(opId, newTarget);
+    const targetsMap = await databaseService.fetchCustomTargets();
+    setCustomTargets(targetsMap);
   };
 
+  // Synchronize projects
   useEffect(() => {
-    const q = query(collection(db, 'projects'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const projectsData = snapshot.docs.map(doc => ({
-        ...doc.data(),
-        id: doc.id
-      })) as Project[];
-      
-      if (projectsData.length === 0) {
-        // Seed INITIAL_PROJECTS to Firestore so they are permanent
-        INITIAL_PROJECTS.forEach(async (proj) => {
-          try {
-            await setDoc(doc(db, 'projects', proj.id), {
-              id: proj.id,
-              name: proj.name,
-              location: proj.location,
-              targetTotal: proj.targetTotal,
-              targetPerDayOperator: proj.targetPerDayOperator || 150,
-              sheetIds: proj.sheetIds,
-              salaryConfig: proj.salaryConfig,
-              ownerEmail: 'system',
-              createdAt: serverTimestamp()
-            });
-          } catch (e) {
-            console.error("Error seeding initial project:", e);
-          }
-        });
-        setAllProjects(INITIAL_PROJECTS);
-      } else {
-        setAllProjects(projectsData);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'projects');
-      setAllProjects(INITIAL_PROJECTS);
-    });
-
-    return () => unsubscribe();
+    const initProjects = async () => {
+      const projectsData = await databaseService.fetchProjects(INITIAL_PROJECTS);
+      setAllProjects(projectsData);
+    };
+    initProjects();
   }, []);
 
   // Sync activeProject reference when allProjects list updates
@@ -344,6 +200,122 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  // Export operational financing recapitulation for active project to XLSX
+  const handleExportToExcel = () => {
+    if (!activeProject) return;
+
+    // AOA Data structure
+    const data: any[][] = [];
+
+    // Title
+    data.push(["REKAPITULASI PEMBIAYAAN OPERASIONAL"]);
+    data.push([`PROYEK: ${activeProject.name.toUpperCase()}`]);
+    data.push([]); // Empty spacing
+
+    // Project Info Column Layout
+    data.push(["Detail Proyek"]);
+    data.push(["Nama Proyek", activeProject.name]);
+    data.push(["Lokasi", activeProject.location]);
+    data.push(["Tarif Buku Tanah (BT)", activeProject.salaryConfig.priceBT]);
+    data.push(["Tarif Surat Ukur (SU)", activeProject.salaryConfig.priceSU]);
+    data.push(["Tanggal Cetak", new Date().toLocaleDateString("id-ID", { dateStyle: 'long' })]);
+    data.push([]); // Empty spacing
+
+    // Table Header
+    data.push([
+      "No",
+      "Nama Personil",
+      "Jabatan",
+      "Shift",
+      "Status",
+      "Volume BT (Berkas)",
+      "Volume SU (Berkas)",
+      "Total Volume (Berkas)",
+      "Biaya BT (IDR)",
+      "Biaya SU (IDR)",
+      "Total Gaji (IDR)"
+    ]);
+
+    let totalBTAll = 0;
+    let totalSUAll = 0;
+    let totalBTPriceAll = 0;
+    let totalSUPriceAll = 0;
+    let totalSalaryAll = 0;
+
+    // Rows for each operator
+    operators.forEach((op, idx) => {
+      const opBT = op.workData.reduce((acc, d) => acc + d.bt, 0);
+      const opSU = op.workData.reduce((acc, d) => acc + d.su, 0);
+      const btPay = opBT * (activeProject.salaryConfig.priceBT || 0);
+      const suPay = opSU * (activeProject.salaryConfig.priceSU || 0);
+      const total = btPay + suPay;
+
+      totalBTAll += opBT;
+      totalSUAll += opSU;
+      totalBTPriceAll += btPay;
+      totalSUPriceAll += suPay;
+      totalSalaryAll += total;
+
+      data.push([
+        idx + 1,
+        op.name,
+        op.jabatan,
+        op.shift,
+        op.status === 'ACTIVE' ? 'Aktif' : 'Keluar',
+        opBT,
+        opSU,
+        opBT + opSU,
+        btPay,
+        suPay,
+        total
+      ]);
+    });
+
+    // Total Row
+    data.push([
+      "TOTAL",
+      "",
+      "",
+      "",
+      "",
+      totalBTAll,
+      totalSUAll,
+      totalBTAll + totalSUAll,
+      totalBTPriceAll,
+      totalSUPriceAll,
+      totalSalaryAll
+    ]);
+
+    // Create workbook and worksheet
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(data);
+
+    // Auto-fit column widths
+    const colWidths = [
+      { wch: 6 },   // No
+      { wch: 25 },  // Nama Personil
+      { wch: 15 },  // Jabatan
+      { wch: 12 },  // Shift
+      { wch: 10 },  // Status
+      { wch: 20 },  // Volume BT (Berkas)
+      { wch: 20 },  // Volume SU (Berkas)
+      { wch: 22 },  // Total Volume (Berkas)
+      { wch: 18 },  // Biaya BT (IDR)
+      { wch: 18 },  // Biaya SU (IDR)
+      { wch: 20 }   // Total Gaji (IDR)
+    ];
+    ws['!cols'] = colWidths;
+
+    XLSX.utils.book_append_sheet(wb, ws, "Rekap Pembiayaan Ops");
+
+    // File name: Rekap_Pembiayaan_ProyekName_YYYY-MM-DD.xlsx
+    const cleanProjName = activeProject.name.replace(/[^a-zA-Z0-9]/g, '_');
+    const today = new Date().toISOString().split('T')[0];
+    const fileName = `Rekap_Pembiayaan_Ops_${cleanProjName}_${today}.xlsx`;
+
+    XLSX.writeFile(wb, fileName);
+  };
+
   // Import database backup from JSON file
   const handleImportDatabase = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -370,11 +342,9 @@ export default function App() {
         if (backupData.operatorTargets) {
           for (const [opId, targetVal] of Object.entries(backupData.operatorTargets)) {
             try {
-              await setDoc(doc(db, 'operatorTargets', opId), {
-                targetPerDay: targetVal
-              });
+              await databaseService.saveOperatorTarget(opId, targetVal);
             } catch (err) {
-              console.warn(`Failed syncing targets to Firestore during import: ${opId}`, err);
+              console.warn(`Failed syncing targets to Database during import: ${opId}`, err);
             }
           }
           setCustomTargets(backupData.operatorTargets);
@@ -383,19 +353,9 @@ export default function App() {
         // 2. Sync projects
         for (const proj of backupData.projects) {
           try {
-            await setDoc(doc(db, 'projects', proj.id), {
-              id: proj.id,
-              name: proj.name,
-              location: proj.location,
-              targetTotal: proj.targetTotal,
-              targetPerDayOperator: proj.targetPerDayOperator || 150,
-              sheetIds: proj.sheetIds,
-              salaryConfig: proj.salaryConfig,
-              ownerEmail: kmUser?.username || 'admin',
-              createdAt: serverTimestamp()
-            });
+            await databaseService.saveProject(proj);
           } catch (err) {
-            console.warn(`Failed syncing project to Firestore: ${proj.id}`, err);
+            console.warn(`Failed syncing project to Database: ${proj.id}`, err);
           }
         }
         setAllProjects(backupData.projects);
@@ -403,9 +363,9 @@ export default function App() {
         // 3. Sync users
         for (const usr of backupData.users) {
           try {
-            await setDoc(doc(db, 'users', usr.username), usr);
+            await databaseService.saveUser(usr);
           } catch (err) {
-            console.warn(`Failed syncing user ${usr.username} to Firestore:`, err);
+            console.warn(`Failed syncing user ${usr.username} to Database:`, err);
           }
         }
         setUsers(backupData.users);
@@ -638,37 +598,24 @@ export default function App() {
 
   const handleSaveProject = async (project: Project) => {
     try {
-      if (allProjects.find(p => p.id === project.id)) {
-        await setDoc(doc(db, 'projects', project.id), {
-          ...project,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      } else {
-        await setDoc(doc(db, 'projects', project.id), {
-          id: project.id,
-          name: project.name,
-          location: project.location,
-          targetTotal: project.targetTotal,
-          targetPerDayOperator: project.targetPerDayOperator || 150,
-          sheetIds: project.sheetIds,
-          salaryConfig: project.salaryConfig,
-          ownerEmail: kmUser?.username || 'anonymous',
-          createdAt: serverTimestamp()
-        });
-      }
+      await databaseService.saveProject(project);
+      const projectsData = await databaseService.fetchProjects(INITIAL_PROJECTS);
+      setAllProjects(projectsData);
       setIsProjectModalOpen(false);
       setProjectToEdit(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `projects/${project.id}`);
+      console.error("Failed to save project:", error);
     }
   };
 
   const handleDeleteProject = async (id: string) => {
     if (!confirm('Hapus proyek ini secara permanen?')) return;
     try {
-      await deleteDoc(doc(db, 'projects', id));
+      await databaseService.deleteProject(id);
+      const projectsData = await databaseService.fetchProjects(INITIAL_PROJECTS);
+      setAllProjects(projectsData);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `projects/${id}`);
+      console.error("Failed to delete project:", error);
     }
   };
 
@@ -868,6 +815,22 @@ export default function App() {
              </div>
            </div>
          )}
+
+         {/* Supabase Connection Status */}
+         <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 flex items-center justify-between gap-1.5 mb-4">
+           <div className="flex items-center gap-1.5 min-w-0">
+             <Database size={11} className={isSupabaseConfigured ? "text-[#28B8A6]" : "text-amber-500"} />
+             <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest truncate">Database</span>
+           </div>
+           <span className={cn(
+             "text-[8px] font-black uppercase px-2 py-0.5 rounded-md shrink-0",
+             isSupabaseConfigured 
+               ? "bg-emerald-50 text-emerald-700 border border-emerald-100" 
+               : "bg-amber-50 text-amber-700 border border-amber-200"
+           )}>
+             {isSupabaseConfigured ? "Supabase" : "Lokal"}
+           </span>
+         </div>
 
          {/* User session display */}
          {kmUser && (
@@ -1436,6 +1399,16 @@ export default function App() {
                       <h2 className="text-xl font-black tracking-tight">Rekapitulasi Pembiayaan Ops</h2>
                       <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1 italic">Kalkulasi Gaji Berdasarkan Produksi Berkas</p>
                     </div>
+                    {activeProject && (
+                      <button
+                        onClick={handleExportToExcel}
+                        className="flex items-center justify-center gap-2 bg-[#28B8A6] hover:bg-teal-600 text-white font-black uppercase text-[11px] tracking-widest px-5 py-3 rounded-2xl shadow-lg shadow-[#28B8A6]/20 transition-all hover:scale-[1.02] self-start md:self-auto cursor-pointer"
+                        title="Ekspor Rekapitulasi Pembiayaan ke Excel (.xlsx)"
+                      >
+                        <FileSpreadsheet size={16} />
+                        Cetak XLSX
+                      </button>
+                    )}
                 </div>
                 
                 <div className="overflow-x-auto">
