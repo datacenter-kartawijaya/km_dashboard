@@ -238,6 +238,9 @@ export const databaseService = {
 
   // --- CUSTOM TARGETS ---
   async fetchCustomTargets(): Promise<Record<string, number>> {
+    const saved = localStorage.getItem('km_operator_targets');
+    const localTargets: Record<string, number> = saved ? JSON.parse(saved) : {};
+
     if (isSupabaseConfigured && supabase) {
       try {
         const { data, error } = await supabase
@@ -245,11 +248,26 @@ export const databaseService = {
           .select('*');
 
         if (!error && data) {
-          const map: Record<string, number> = {};
-          data.forEach((d: any) => {
-            map[d.id] = d.targetPerDay;
-          });
-          return map;
+          if (data.length > 0) {
+            const map: Record<string, number> = {};
+            data.forEach((d: any) => {
+              map[d.id] = d.targetPerDay;
+            });
+            return map;
+          } else if (Object.keys(localTargets).length > 0) {
+            // Auto migrate local operator targets to Supabase if the online table is empty
+            for (const [opId, targetVal] of Object.entries(localTargets)) {
+              await supabase
+                .from('km_operator_targets')
+                .upsert({
+                  id: opId,
+                  targetPerDay: targetVal
+                });
+            }
+            return localTargets;
+          } else {
+            return {};
+          }
         } else if (error) {
           console.error("Supabase fetch operator targets failed, switching to local:", error);
         }
@@ -258,8 +276,7 @@ export const databaseService = {
       }
     }
 
-    const saved = localStorage.getItem('km_operator_targets');
-    return saved ? JSON.parse(saved) : {};
+    return localTargets;
   },
 
   async saveOperatorTarget(opId: string, targetPerDay: number): Promise<void> {
