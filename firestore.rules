@@ -47,17 +47,19 @@ service cloud.firestore {
       allow create: if isSignedIn() && 
                     isValidId(projectId) && 
                     isValidProject(incoming()) &&
+                    incoming().id == projectId &&
                     (incoming().ownerEmail == request.auth.token.email || incoming().ownerEmail == 'system' || incoming().ownerEmail == 'anonymous') &&
                     incoming().createdAt == request.time;
 
       allow update: if isSignedIn() &&
                     isValidId(projectId) &&
                     isValidProject(incoming()) &&
+                    incoming().id == projectId &&
                     incoming().ownerEmail == existing().ownerEmail &&
                     incoming().createdAt == existing().createdAt &&
                     (
                       // Action: General Update
-                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'location', 'targetTotal', 'targetPerDayOperator', 'salaryConfig', 'sheetIds', 'updatedAt'])
+                      incoming().diff(existing()).affectedKeys().hasOnly(['id', 'name', 'location', 'targetTotal', 'targetPerDayOperator', 'salaryConfig', 'sheetIds', 'updatedAt'])
                     ) &&
                     incoming().updatedAt == request.time;
 

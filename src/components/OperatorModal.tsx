@@ -44,17 +44,23 @@ export function OperatorModal({ operator, isOpen, onClose, onSaveTarget }: Opera
 
   const totalBT = operator.workData.reduce((acc, d) => acc + d.bt, 0);
   const totalSU = operator.workData.reduce((acc, d) => acc + d.su, 0);
-  const totalProduction = totalBT + totalSU;
+  const totalProduction = Number((totalBT * 0.6 + totalSU * 0.4).toFixed(1));
   const daysPresent = operator.workData.filter(d => d.isPresent).length;
   const totalDays = operator.workData.length;
   const attendanceRate = totalDays > 0 ? (daysPresent / totalDays) * 100 : 0;
   
   const avgProduction = totalDays > 0 ? totalProduction / totalDays : 0;
-  const bestDay = Math.max(...operator.workData.map(d => d.bt + d.su), 0);
+  const bestDay = Number(Math.max(...operator.workData.map(d => d.bt * 0.6 + d.su * 0.4), 0).toFixed(1));
+
+  const chartData = operator.workData.map(d => ({
+    ...d,
+    bt: Number((d.bt * 0.6).toFixed(1)),
+    su: Number((d.su * 0.4).toFixed(1))
+  }));
 
   // Hit Rate dan Konsistensi berdasarkan target harian yg ditentukan leader
   const activeDays = operator.workData.filter(d => d.isPresent);
-  const daysMeetingTarget = activeDays.filter(d => (d.bt + d.su) >= operator.targetPerDay).length;
+  const daysMeetingTarget = activeDays.filter(d => (d.bt * 0.6 + d.su * 0.4) >= operator.targetPerDay).length;
   const targetHitRate = activeDays.length > 0 ? Math.round((daysMeetingTarget / activeDays.length) * 100) : 0;
 
   let consistencyScore = "Rendah (Low)";
@@ -191,7 +197,7 @@ export function OperatorModal({ operator, isOpen, onClose, onSaveTarget }: Opera
 
                 <div className="h-[300px] mb-12">
                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={operator.workData}>
+                      <AreaChart data={chartData}>
                         <defs>
                           <linearGradient id="opColor" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#28B8A6" stopOpacity={0.2}/>
@@ -241,7 +247,24 @@ export function OperatorModal({ operator, isOpen, onClose, onSaveTarget }: Opera
                    <div>
                       <h4 className="text-sm font-black uppercase tracking-widest text-gray-400 mb-4 px-2">Work History Log</h4>
                       <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                         {operator.workData.slice().reverse().map((day, idx) => (
+                         {[...operator.workData].sort((a, b) => {
+                           const parseDateObj = (dStr: string) => {
+                             const parts = dStr.split(" ");
+                             if (parts.length === 3) {
+                               const day = parseInt(parts[0], 10);
+                               const monthStr = parts[1].toUpperCase();
+                               const year = parseInt(parts[2], 10);
+                               const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+                               const monthIndex = months.indexOf(monthStr);
+                               if (monthIndex !== -1) {
+                                 return new Date(year, monthIndex, day).getTime();
+                               }
+                             }
+                             const parsed = Date.parse(dStr);
+                             return !isNaN(parsed) ? parsed : 0;
+                           };
+                           return parseDateObj(a.date) - parseDateObj(b.date);
+                         }).map((day, idx) => (
                            <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100 hover:border-[#28B8A6]/30 transition-colors">
                               <div className="flex items-center gap-3">
                                  <div className={`w-2 h-2 rounded-full ${day.isPresent ? 'bg-emerald-500' : 'bg-gray-300'}`} />
@@ -250,7 +273,7 @@ export function OperatorModal({ operator, isOpen, onClose, onSaveTarget }: Opera
                               <div className="flex items-center gap-4 text-[10px] font-black">
                                  <span className="text-blue-600">BT: {day.bt}</span>
                                  <span className="text-emerald-600">SU: {day.su}</span>
-                                 <span className="bg-white px-2 py-1 rounded-lg shadow-sm">TOTAL: {day.bt + day.su}</span>
+                                 <span className="bg-white px-2 py-1 rounded-lg shadow-sm">TOTAL: {Number((day.bt * 0.6 + day.su * 0.4).toFixed(1))}</span>
                               </div>
                            </div>
                          ))}

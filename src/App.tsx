@@ -284,7 +284,7 @@ export default function App() {
       });
     });
 
-    const totalVerified = totalBT + totalSU;
+    const totalVerified = Number((totalBT * 0.6 + totalSU * 0.4).toFixed(1));
     const projectBudget = project ? (totalBT * project.salaryConfig.priceBT) + (totalSU * project.salaryConfig.priceSU) : 0;
     const completionRate = project ? (totalVerified / project.targetTotal) * 100 : 0;
     const avgPresence = ops.length > 0 ? (totalPresence / (ops.length * 30)) * 100 : 0;
@@ -341,13 +341,15 @@ export default function App() {
         }
         dateMap[d.date].bt += d.bt;
         dateMap[d.date].su += d.su;
-        dateMap[d.date].total += (d.bt + d.su);
+        dateMap[d.date].total += (d.bt * 0.6 + d.su * 0.4);
       });
     });
 
     return Object.keys(dateMap).map(date => ({
       date,
-      ...dateMap[date]
+      bt: Number(dateMap[date].bt.toFixed(1)),
+      su: Number(dateMap[date].su.toFixed(1)),
+      total: Number(dateMap[date].total.toFixed(1))
     })).slice(0, 32);
   }, [operators]);
 
@@ -690,7 +692,7 @@ export default function App() {
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="absolute top-0 left-0 bottom-0 w-[80%] max-w-xs bg-white p-6 shadow-2xl"
+              className="absolute top-0 left-0 bottom-0 w-[80%] max-w-xs bg-white p-6 shadow-2xl overflow-y-auto custom-scrollbar"
             >
               <button 
                 onClick={() => setIsMobileMenuOpen(false)}
@@ -705,7 +707,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* Desktop Sidebar */}
-      <aside className="hidden lg:flex w-72 border-r border-[#E2E8F0] bg-white flex-col sticky top-0 h-screen shadow-[4px_0_24px_rgba(0,0,0,0.01)] shrink-0">
+      <aside className="hidden lg:flex w-72 border-r border-[#E2E8F0] bg-white flex-col sticky top-0 h-screen shadow-[4px_0_24px_rgba(0,0,0,0.01)] shrink-0 overflow-y-auto custom-scrollbar">
         <Navigation />
       </aside>
 
@@ -1007,7 +1009,7 @@ export default function App() {
                                      {/* Daily volumes mapped from lookups */}
                                      {uniqueDates.map((date) => {
                                        const dayData = workByDate[op.id]?.[date];
-                                       const volume = dayData ? (dayData.bt + dayData.su) : 0;
+                                       const volume = dayData ? Number((dayData.bt * 0.6 + dayData.su * 0.4).toFixed(1)) : 0;
                                        rowTotal += volume;
 
                                        return (
@@ -1042,10 +1044,10 @@ export default function App() {
                                    TOTAL KINERJA
                                  </td>
                                  {uniqueDates.map((date) => {
-                                   const colTotal = filteredOperators.reduce((sum, op) => {
+                                   const colTotal = Number(filteredOperators.reduce((sum, op) => {
                                      const dayData = workByDate[op.id]?.[date];
-                                     return sum + (dayData ? (dayData.bt + dayData.su) : 0);
-                                   }, 0);
+                                     return sum + (dayData ? (dayData.bt * 0.6 + dayData.su * 0.4) : 0);
+                                   }, 0).toFixed(1));
 
                                    return (
                                      <td 
@@ -1063,9 +1065,9 @@ export default function App() {
                                  {/* Grand Total Footer */}
                                  <td className="py-4 px-6 text-sm font-black text-emerald-800 bg-emerald-50/80 min-w-[100px] border-l border-gray-100">
                                    <span className="inline-block px-3 py-1 bg-emerald-100 border border-emerald-200 rounded-xl shadow-sm">
-                                     {filteredOperators.reduce((total, op) => {
-                                       return total + op.workData.reduce((sum, d) => sum + (d.bt + d.su), 0);
-                                     }, 0)}
+                                     {Number(filteredOperators.reduce((total, op) => {
+                                       return total + op.workData.reduce((sum, d) => sum + (d.bt * 0.6 + d.su * 0.4), 0);
+                                     }, 0).toFixed(1))}
                                    </span>
                                  </td>
                                </tr>
@@ -1401,7 +1403,7 @@ export default function App() {
                             </div>
                         </td>
                         <td className="px-8 py-6 text-right">
-                          <div className="text-sm font-black text-gray-900 leading-none mb-1">{(opBT + opSU).toLocaleString()}</div>
+                          <div className="text-sm font-black text-gray-900 leading-none mb-1">{(opBT * 0.6 + opSU * 0.4).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}</div>
                           <div className="text-[10px] font-bold text-gray-400 capitalize">{opBT} BT • {opSU} SU</div>
                         </td>
                         <td className="px-8 py-6 text-right">
@@ -1409,19 +1411,22 @@ export default function App() {
                         </td>
                         <td className="px-8 py-6">
                           <div className="flex gap-1 h-8 items-end w-36 bg-gray-50/50 p-1.5 rounded-xl border border-gray-100">
-                            {op.workData.slice(-14).map((d, idx) => (
-                              <div 
-                                key={idx}
-                                className={cn(
-                                  "flex-1 rounded-t-lg transition-all duration-300",
-                                  d.bt + d.su > op.targetPerDay ? "bg-emerald-500" : 
-                                  d.bt + d.su > 0 ? "bg-[#28B8A6]" : "bg-gray-200"
-                                )}
-                                style={{ 
-                                  height: d.bt + d.su > 0 ? `${Math.min(100, ((d.bt + d.su) / (op.targetPerDay * 1.5)) * 100)}%` : '15%'
-                                }}
-                              />
-                            ))}
+                            {op.workData.slice(-14).map((d, idx) => {
+                              const vol = Number((d.bt * 0.6 + d.su * 0.4).toFixed(1));
+                              return (
+                                <div 
+                                  key={idx}
+                                  className={cn(
+                                    "flex-1 rounded-t-lg transition-all duration-300",
+                                    vol > op.targetPerDay ? "bg-emerald-500" : 
+                                    vol > 0 ? "bg-[#28B8A6]" : "bg-gray-200"
+                                  )}
+                                  style={{ 
+                                    height: vol > 0 ? `${Math.min(100, (vol / (op.targetPerDay * 1.5)) * 100)}%` : '15%'
+                                  }}
+                                />
+                              );
+                            })}
                           </div>
                         </td>
                       </motion.tr>

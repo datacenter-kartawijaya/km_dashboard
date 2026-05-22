@@ -216,32 +216,55 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
       const isExistingDetail = merged[key].id.startsWith("op-raw") || merged[key].id.startsWith("op-log");
 
       if (isNewDetail && !isExistingDetail) {
-        // Shift, status, and original ID is preserved from recap, while workData comes from detailed logs!
-        const oldShift = merged[key].shift;
-        const oldStatus = merged[key].status;
-        const oldId = merged[key].id;
+        // We have detail (current op) vs recap (existing merged)
+        // Keep recap as base, but enrich with detail workData
+        const recapOp = merged[key];
+        const detailOp = op;
         
-        merged[key] = op;
-        if (oldShift !== Shift.NONE) merged[key].shift = oldShift;
-        if (oldStatus !== Status.ACTIVE) merged[key].status = oldStatus;
-        merged[key].id = oldId;
+        detailOp.workData.forEach(detailDay => {
+          const idx = recapOp.workData.findIndex(d => d.date === detailDay.date);
+          if (idx === -1) {
+            recapOp.workData.push(detailDay);
+          } else {
+            // Take the max or safely merge counts
+            recapOp.workData[idx].bt = Math.max(recapOp.workData[idx].bt, detailDay.bt);
+            recapOp.workData[idx].su = Math.max(recapOp.workData[idx].su, detailDay.su);
+            recapOp.workData[idx].isPresent = recapOp.workData[idx].isPresent || detailDay.isPresent;
+          }
+        });
+        if (detailOp.shift !== Shift.NONE) recapOp.shift = detailOp.shift;
       } else if (!isNewDetail && isExistingDetail) {
-         // Keep detailed logs, but sync newer shift/status if present
-         if (op.shift !== Shift.NONE) merged[key].shift = op.shift;
-         if (op.status !== Status.ACTIVE) merged[key].status = op.status;
+        // We have recap (current op) vs detail (existing merged)
+        // Keep detail as base, but merge recap workData into it
+        const recapOp = op;
+        const detailOp = merged[key];
+        
+        recapOp.workData.forEach(recapDay => {
+          const idx = detailOp.workData.findIndex(d => d.date === recapDay.date);
+          if (idx === -1) {
+            detailOp.workData.push(recapDay);
+          } else {
+            detailOp.workData[idx].bt = Math.max(detailOp.workData[idx].bt, recapDay.bt);
+            detailOp.workData[idx].su = Math.max(detailOp.workData[idx].su, recapDay.su);
+            detailOp.workData[idx].isPresent = detailOp.workData[idx].isPresent || recapDay.isPresent;
+          }
+        });
+        
+        if (recapOp.shift !== Shift.NONE) detailOp.shift = recapOp.shift;
+        if (recapOp.status !== Status.ACTIVE) detailOp.status = recapOp.status;
       } else {
-         // Standard workData merge for identical detail or identical recap levels
-         const existingWork = merged[key].workData;
-         op.workData.forEach(newDay => {
-           const idx = existingWork.findIndex(d => d.date === newDay.date);
-           if (idx === -1) {
-             existingWork.push(newDay);
-           } else {
-             existingWork[idx].bt = Math.max(existingWork[idx].bt, newDay.bt);
-             existingWork[idx].su = Math.max(existingWork[idx].su, newDay.su);
-             existingWork[idx].isPresent = existingWork[idx].isPresent || newDay.isPresent;
-           }
-         });
+        // Identical types merge
+        const existingWork = merged[key].workData;
+        op.workData.forEach(newDay => {
+          const idx = existingWork.findIndex(d => d.date === newDay.date);
+          if (idx === -1) {
+            existingWork.push(newDay);
+          } else {
+            existingWork[idx].bt = Math.max(existingWork[idx].bt, newDay.bt);
+            existingWork[idx].su = Math.max(existingWork[idx].su, newDay.su);
+            existingWork[idx].isPresent = existingWork[idx].isPresent || newDay.isPresent;
+          }
+        });
       }
     }
   });
@@ -293,6 +316,23 @@ function parseCSV(csv: string): OperatorRecord[] {
   return parseRecapCSV(lines);
 }
 
+function isValidDate(str: string): boolean {
+  if (!str) return false;
+  const cleaned = str.trim().toLowerCase();
+  if (
+    cleaned === "" || 
+    cleaned === "-" || 
+    cleaned === "0" || 
+    cleaned === "belum" || 
+    cleaned.includes("belum") || 
+    cleaned.includes("tidak") || 
+    cleaned.includes("none")
+  ) {
+    return false;
+  }
+  return /[0-9]/.test(cleaned);
+}
+
 function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
   let operatorName = "UNKNOWN";
   
@@ -325,7 +365,10 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
   let btIdx = -1;
   let suIdx = -1;
   let dateIdx = -1;
+  let tanggalVerifBTIdx = -1;
+  let tanggalVerifSUIdx = -1;
 
+  // 1. Find the main sheet header row containing BT/SU status columns
   for (let i = 0; i < Math.min(lines.length, 15); i++) {
     const row = lines[i].map(c => c.toUpperCase().trim());
     
@@ -336,23 +379,49 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
       !c.includes("JENIS") && !c.includes("NO") && !c.includes("TAHUN")
     );
 
-    let dIndex = row.findIndex(c => c === "TANGGAL PENGERJAAN" || c.includes("PENGERJAAN"));
-    if (dIndex === -1) {
-      dIndex = row.findIndex(c => c === "TANGGAL" || c === "TANGGAL ");
-    }
-    if (dIndex === -1) {
-      dIndex = row.findIndex(c => c.includes("TANGGAL") && !c.includes("UPDATE"));
-    }
-    if (dIndex === -1) {
-      dIndex = row.findIndex(c => c.includes("TANGGAL"));
-    }
-
     if (bIndex !== -1 && sIndex !== -1) {
       headerRowIndex = i;
       btIdx = bIndex;
       suIdx = sIndex;
-      if (dIndex !== -1) dateIdx = dIndex;
       break;
+    }
+  }
+
+  // 2. Scan all header candidate rows (from row 0 to headerRowIndex + 2) to search for Verif dates & Work Date
+  if (headerRowIndex !== -1) {
+    for (let i = 0; i < Math.min(lines.length, headerRowIndex + 3); i++) {
+      const row = lines[i].map(c => c.toUpperCase().trim());
+
+      const tvbtIndex = row.findIndex(c => 
+        c === "TANGGAL VERIFIKASI BT" || 
+        c.includes("VERIFIKASI BT") || 
+        c.includes("VERIF BT") || 
+        (c.includes("TANGGAL") && c.includes("BT") && !c.includes("STATUS"))
+      );
+      if (tvbtIndex !== -1 && tanggalVerifBTIdx === -1) {
+        tanggalVerifBTIdx = tvbtIndex;
+      }
+
+      const tvsuIndex = row.findIndex(c => 
+        c === "TANGGAL VERIFIKASI SU" || 
+        c.includes("VERIFIKASI SU") || 
+        c.includes("VERIF SU") || 
+        (c.includes("TANGGAL") && c.includes("SU") && !c.includes("STATUS"))
+      );
+      if (tvsuIndex !== -1 && tanggalVerifSUIdx === -1) {
+        tanggalVerifSUIdx = tvsuIndex;
+      }
+
+      let dIndex = row.findIndex(c => c === "TANGGAL PENGERJAAN" || c.includes("PENGERJAAN"));
+      if (dIndex === -1) {
+        dIndex = row.findIndex(c => c === "TANGGAL" || c === "TANGGAL ");
+      }
+      if (dIndex === -1) {
+        dIndex = row.findIndex(c => c.includes("TANGGAL") && !c.includes("UPDATE") && !c.includes("VERIFIKASI") && !c.includes("VERIF"));
+      }
+      if (dIndex !== -1 && dateIdx === -1) {
+        dateIdx = dIndex;
+      }
     }
   }
 
@@ -361,23 +430,59 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
     for (let i = headerRowIndex + 1; i < lines.length; i++) {
       const row = lines[i];
       if (!row || row.length === 0) continue;
-      const isBT = btIdx !== -1 && (row[btIdx] || "").toLowerCase().includes("verifikasi");
-      const isSU = suIdx !== -1 && (row[suIdx] || "").toLowerCase().includes("verifikasi");
+      
+      let isBT = btIdx !== -1 && (row[btIdx] || "").toLowerCase().includes("verifikasi");
+      let isSU = suIdx !== -1 && (row[suIdx] || "").toLowerCase().includes("verifikasi");
+      
       if (!isBT && !isSU) continue;
 
-      let dateStr = "UNKNOWN";
-      if (dateIdx !== -1 && row[dateIdx] && (row[dateIdx] || "").trim() !== "") {
-        dateStr = (row[dateIdx] || "").trim();
-      } else {
-        const dMatch = row.find(c => c && c.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/));
-        if (dMatch) dateStr = dMatch.trim();
+      let btDateStr = "";
+      if (isBT) {
+        if (tanggalVerifBTIdx !== -1) {
+          const rawDate = (row[tanggalVerifBTIdx] || "").trim();
+          if (isValidDate(rawDate)) {
+            btDateStr = rawDate;
+          } else {
+            isBT = false;
+          }
+        }
       }
 
-      const normalizedDate = normalizeDateString(dateStr);
+      let suDateStr = "";
+      if (isSU) {
+        if (tanggalVerifSUIdx !== -1) {
+          const rawDate = (row[tanggalVerifSUIdx] || "").trim();
+          if (isValidDate(rawDate)) {
+            suDateStr = rawDate;
+          } else {
+            isSU = false;
+          }
+        }
+      }
 
-      if (!dailyAggregation[normalizedDate]) dailyAggregation[normalizedDate] = { bt: 0, su: 0 };
-      if (isBT) dailyAggregation[normalizedDate].bt += 1;
-      if (isSU) dailyAggregation[normalizedDate].su += 1;
+      if (!isBT && !isSU) continue;
+
+      let fallbackDateStr = "UNKNOWN";
+      if (dateIdx !== -1 && row[dateIdx] && (row[dateIdx] || "").trim() !== "") {
+        fallbackDateStr = (row[dateIdx] || "").trim();
+      } else {
+        const dMatch = row.find(c => c && c.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/));
+        if (dMatch) fallbackDateStr = dMatch.trim();
+      }
+
+      if (isBT) {
+        const dStr = btDateStr || fallbackDateStr;
+        const normalizedDate = normalizeDateString(dStr);
+        if (!dailyAggregation[normalizedDate]) dailyAggregation[normalizedDate] = { bt: 0, su: 0 };
+        dailyAggregation[normalizedDate].bt += 1;
+      }
+
+      if (isSU) {
+        const dStr = suDateStr || fallbackDateStr;
+        const normalizedDate = normalizeDateString(dStr);
+        if (!dailyAggregation[normalizedDate]) dailyAggregation[normalizedDate] = { bt: 0, su: 0 };
+        dailyAggregation[normalizedDate].su += 1;
+      }
     }
 
     const workData: DayWork[] = Object.entries(dailyAggregation).map(([date, counts]) => ({
@@ -607,7 +712,7 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
       if (!h || h === "TOTAL" || h === "JUMLAH" || h === "KETERANGAN") break;
 
       const cleanVal = cellVal.replace(/[^0-9,.]/g, '').replace(/,/g, '.');
-      const count = isNaN(parseFloat(cleanVal)) ? 0 : Math.round(parseFloat(cleanVal));
+      const count = isNaN(parseFloat(cleanVal)) ? 0 : parseFloat(cleanVal);
       
       if (count > 0) foundAnyData = true;
 
@@ -616,8 +721,8 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
         label = `${col - dateStartCol + 1}`;
       }
 
-      const btVal = Math.round(count * 0.6);
-      const suVal = count - btVal;
+      const btVal = count;
+      const suVal = count;
 
       workData.push({
         date: label,
