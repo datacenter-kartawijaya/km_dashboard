@@ -1563,7 +1563,7 @@ export default function App() {
             <div className="max-w-xl">
               <h2 className="text-2xl font-black tracking-tight text-gray-800">{activeProject ? 'Ledger Personil PT. KM' : 'Top Performer Global'}</h2>
               <p className="text-sm text-gray-400 mt-1">
-                Daftar operator, QC, dan manajemen lapangan {activeProject ? `untuk project ${activeProject.name}` : `Lintas Proyek KM`}
+                Daftar operator {activeProject ? `untuk project ${activeProject.name}` : `untuk project BPN`}
               </p>
             </div>
             
