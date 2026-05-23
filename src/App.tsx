@@ -47,7 +47,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import * as XLSX from 'xlsx';
 
-import { PROJECTS as INITIAL_PROJECTS, fetchAllSheetsData } from './services/dataService';
+import { PROJECTS as INITIAL_PROJECTS, fetchAllSheetsData, extractSheetIdAndGid, discoverWorkbookTabs } from './services/dataService';
 import { Shift, Status, OperatorRecord, Project, KMUser, KMDatabaseBackup, UserRole } from './types';
 import { ProjectModal } from './components/ProjectModal';
 import { OperatorModal } from './components/OperatorModal';
@@ -314,6 +314,270 @@ export default function App() {
     const fileName = `Rekap_Pembiayaan_Ops_${cleanProjName}_${today}.xlsx`;
 
     XLSX.writeFile(wb, fileName);
+  };
+
+  // Export format Lampiran H Laporan Akhir based on Google Sheets logs for active project to XLSX
+  const handleExportLampiranH = async () => {
+    if (!activeProject) return;
+    setIsLoading(true);
+    try {
+      const rowsData: any[] = [];
+      const emptyVal = "-";
+
+      // Loop and fetch raw spreadsheets to find actual verified rows
+      for (const url of activeProject.sheetIds) {
+        try {
+          const { id, gid } = extractSheetIdAndGid(url);
+          let fetchUrls = [`https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`];
+          if (gid) {
+            fetchUrls = [`https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`];
+          } else {
+            const tabs = await discoverWorkbookTabs(url);
+            if (tabs.length > 0) {
+              fetchUrls = tabs.map(tab => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${tab.gid}`);
+            }
+          }
+
+          for (const fetchUrl of fetchUrls) {
+            const res = await fetch(fetchUrl);
+            if (!res.ok) continue;
+            const csvText = await res.text();
+            if (csvText.trim().startsWith('<!DOCTYPE html>') || csvText.toLowerCase().includes("<html")) continue;
+
+            const lines = csvText.split(/\r?\n/).filter(l => l.trim() !== "").map(line => {
+              return line.split(/,(?=(?:[^"]*"){2})*[^"]*$/).map(cell => {
+                let cleaned = cell.trim();
+                if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+                  cleaned = cleaned.substring(1, cleaned.length - 1).trim();
+                }
+                return cleaned.replace(/""/g, '"');
+              });
+            });
+
+            let headerIdx = -1;
+            const colIndices: any = {};
+            
+            for (let i = 0; i < Math.min(lines.length, 30); i++) {
+              const row = lines[i].map(c => c.toUpperCase().trim());
+              const hasBT = row.some(c => c === "BT" || c.includes("STATUS BT") || c.startsWith("STATUS BT"));
+              const hasSU = row.some(c => c === "SU" || c.includes("STATUS SU") || c.startsWith("STATUS SU"));
+              
+              if (hasBT || hasSU) {
+                headerIdx = i;
+                row.forEach((colName, colIdx) => {
+                  if (colName.includes("KECAMATAN")) colIndices.kecamatan = colIdx;
+                  if (colName.includes("DESA") || colName.includes("KELURAHAN")) colIndices.desa = colIdx;
+                  if (colName.includes("TIPE HAK") || colName.includes("JENIS HAK")) colIndices.tipeHak = colIdx;
+                  if (colName.includes("TIPE SU") || colName.includes("JENIS SU") || colName.includes("TIPE_SU")) colIndices.tipeSU = colIdx;
+                  if (colName.includes("PEMEGANG HAK") || colName.includes("NAMA PEMILIK")) colIndices.pemegangHak = colIdx;
+                  if (colName.includes("NIB")) colIndices.nib = colIdx;
+                  if (colName.includes("LUAS")) colIndices.luas = colIdx;
+                  if (colName.includes("NOMOR HAK") || colName.includes("NO HAK") || colName.includes("NOHAK")) colIndices.noHak = colIdx;
+                  if (colName.includes("NOMOR SU") || colName.includes("NO SU") || colName.includes("NOSU")) colIndices.noSU = colIdx;
+                  if (colName.includes("TANGGAL VERIFIKASI BT") || colName.includes("VERIFIKASI BT") || colName.includes("VERIF_BT") || colName.includes("TGL VERIF BT")) colIndices.tglBT = colIdx;
+                  if (colName.includes("TANGGAL VERIFIKASI SU") || colName.includes("VERIFIKASI SU") || colName.includes("VERIF_SU") || colName.includes("TGL VERIF SU")) colIndices.tglSU = colIdx;
+                  if (colName.includes("USER") || colName.includes("PETUGAS") || colName.includes("OPERATOR")) colIndices.user = colIdx;
+                  if (colName === "BT" || colName.includes("STATUS BT")) colIndices.btStatus = colIdx;
+                  if (colName === "SU" || colName.includes("STATUS SU")) colIndices.suStatus = colIdx;
+                });
+                break;
+              }
+            }
+
+            if (headerIdx !== -1) {
+              for (let r = headerIdx + 1; r < lines.length; r++) {
+                const row = lines[r];
+                if (!row || row.length === 0) continue;
+
+                const btState = colIndices.btStatus !== undefined ? (row[colIndices.btStatus] || "").toLowerCase() : "";
+                const suState = colIndices.suStatus !== undefined ? (row[colIndices.suStatus] || "").toLowerCase() : "";
+
+                const isBTVerified = btState.includes("verifikasi") || btState.includes("verif");
+                const isSUVerified = suState.includes("verifikasi") || suState.includes("verif");
+
+                if (!isBTVerified && !isSUVerified) continue;
+
+                rowsData.push({
+                  kanwil: `Kanwil BPN Provinsi ${activeProject.location}`,
+                  kantah: activeProject.name,
+                  kecamatan: colIndices.kecamatan !== undefined ? (row[colIndices.kecamatan] || emptyVal) : emptyVal,
+                  desa: colIndices.desa !== undefined ? (row[colIndices.desa] || emptyVal) : emptyVal,
+                  tipeHak: colIndices.tipeHak !== undefined ? (row[colIndices.tipeHak] || emptyVal) : emptyVal,
+                  tipeSU: colIndices.tipeSU !== undefined ? (row[colIndices.tipeSU] || emptyVal) : emptyVal,
+                  pemegangHak: colIndices.pemegangHak !== undefined ? (row[colIndices.pemegangHak] || emptyVal) : emptyVal,
+                  nib: colIndices.nib !== undefined ? (row[colIndices.nib] || emptyVal) : emptyVal,
+                  luas: colIndices.luas !== undefined ? (row[colIndices.luas] || emptyVal) : emptyVal,
+                  noHak: colIndices.noHak !== undefined ? (row[colIndices.noHak] || emptyVal) : emptyVal,
+                  noSU: colIndices.noSU !== undefined ? (row[colIndices.noSU] || emptyVal) : emptyVal,
+                  tglBT: colIndices.tglBT !== undefined && isBTVerified ? (row[colIndices.tglBT] || emptyVal) : emptyVal,
+                  tglSU: colIndices.tglSU !== undefined && isSUVerified ? (row[colIndices.tglSU] || emptyVal) : emptyVal,
+                  user: colIndices.user !== undefined ? (row[colIndices.user] || emptyVal) : (kmUser?.name || "Petugas KM")
+                });
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Failed individual sheet parsing in export:", e);
+        }
+      }
+
+      const excelData: any[][] = [];
+
+      // AOA format mapping the precise attachment layout
+      excelData.push(["LAMPIRAN H LAPORAN AKHIR KEGIATAN VERIFIKASI BUKU TANAH DAN SURAT UKUR ELEKTRONIK"]);
+      excelData.push(["LAPORAN AKHIR KEGIATAN VERIFIKASI BUKU TANAH DAN SURAT UKUR ELEKTRONIK"]);
+      excelData.push([`Kantor Pertanahan: ${activeProject.name}`]);
+      excelData.push([]);
+
+      const reportDate = new Date().toLocaleDateString("id-ID", { dateStyle: "long" });
+      excelData.push([`Tanggal Laporan: ${reportDate}`]);
+      excelData.push([]);
+
+      excelData.push(["I. DATA BUKU TANAH DAN SURAT UKUR"]);
+      excelData.push([]);
+
+      excelData.push([
+        "No",
+        "Kanwil",
+        "Kantah",
+        "Kecamatan",
+        "Desa/Kelurahan",
+        "Tipe Hak",
+        "Tipe SU/GD",
+        "Pemegang Hak",
+        "NIB",
+        "Luas",
+        "Nomor Hak (Lengkap)",
+        "Nomor SU/GD",
+        "Tanggal Verifikasi BT",
+        "Tanggal Verifikasi SU",
+        "User Verifikasi"
+      ]);
+
+      let btVerifiedCount = 0;
+      let suVerifiedCount = 0;
+
+      if (rowsData.length > 0) {
+        rowsData.forEach((row, idx) => {
+          if (row.tglBT !== emptyVal) btVerifiedCount++;
+          if (row.tglSU !== emptyVal) suVerifiedCount++;
+          
+          excelData.push([
+            idx + 1,
+            row.kanwil,
+            row.kantah,
+            row.kecamatan,
+            row.desa,
+            row.tipeHak,
+            row.tipeSU,
+            row.pemegangHak,
+            row.nib,
+            row.luas,
+            row.noHak,
+            row.noSU,
+            row.tglBT,
+            row.tglSU,
+            row.user
+          ]);
+        });
+      } else {
+        // Fallback row if no data present
+        excelData.push([
+          1,
+          `Kanwil BPN Provinsi ${activeProject.location}`,
+          activeProject.name,
+          "[Kecamatan]",
+          "[Desa/Kelurahan]",
+          "[Tipe Hak]",
+          "[Tipe SU]",
+          "[Pemegang Hak]",
+          "[NIB]",
+          "[Luas]",
+          "[Nomor Hak]",
+          "[Nomor SU]",
+          reportDate,
+          reportDate,
+          kmUser ? kmUser.name : "Petugas KM"
+        ]);
+        btVerifiedCount = 1;
+        suVerifiedCount = 1;
+      }
+
+      excelData.push([]);
+      excelData.push(["III. KESIMPULAN"]);
+      excelData.push([`4. Jumlah total Buku Tanah yang telah diverifikasi: ${btVerifiedCount} berkas`]);
+      excelData.push([`5. Jumlah total Surat Ukur/Gambar Denah yang telah diverifikasi: ${suVerifiedCount} berkas`]);
+      excelData.push(["6. Catatan tambahan (jika ada): -"]);
+      excelData.push([]);
+      excelData.push([]);
+
+      // Signatures Layout matching the user's report image
+      excelData.push([
+        "",
+        "Penanggung Jawab Kegiatan",
+        "", "", "", "", "", "", "", "",
+        "Petugas Verifikasi"
+      ]);
+      excelData.push([
+        "",
+        "(PPK Kantah):",
+        "", "", "", "", "", "", "", "",
+        "(CV. Kartawijaya Mandiri):"
+      ]);
+      excelData.push([]);
+      excelData.push([]);
+      excelData.push([
+        "",
+        "Tanda Tangan: [ _____________________ ]",
+        "", "", "", "", "", "", "", "",
+        "Tanda Tangan: [ _____________________ ]"
+      ]);
+      excelData.push([
+        "",
+        "Nama: _________________________________",
+        "", "", "", "", "", "", "", "",
+        `Nama: ${kmUser ? kmUser.name : "_________________________"}`
+      ]);
+      excelData.push([
+        "",
+        "Jabatan: PPK Kantor Pertanahan",
+        "", "", "", "", "", "", "", "",
+        "Jabatan: Leader Verifikasi"
+      ]);
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(excelData);
+
+      ws['!cols'] = [
+        { wch: 6 },   // No
+        { wch: 25 },  // Kanwil
+        { wch: 25 },  // Kantah
+        { wch: 16 },  // Kecamatan
+        { wch: 16 },  // Desa/Kelurahan
+        { wch: 12 },  // Tipe Hak
+        { wch: 12 },  // Tipe SU
+        { wch: 20 },  // Pemegang Hak
+        { wch: 15 },  // NIB
+        { wch: 10 },  // Luas
+        { wch: 22 },  // Nomor Hak
+        { wch: 16 },  // Nomor SU
+        { wch: 20 },  // Tgl BT
+        { wch: 20 },  // Tgl SU
+        { wch: 16 }   // User Verifikasi
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, "Lampiran H");
+
+      const cleanProjName = activeProject.name.replace(/[^a-zA-Z0-9]/g, '_');
+      const fileName = `Lampiran_H_${cleanProjName}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      XLSX.writeFile(wb, fileName);
+    } catch (err) {
+      console.error("Failed to generate Lampiran H:", err);
+      alert("Pencetakan Lampiran H Gagal: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Import database backup from JSON file
@@ -1018,7 +1282,9 @@ export default function App() {
               label: 'Buku Tanah (BT)', 
               value: (activeStats?.totalBT || 0).toLocaleString(), 
               icon: FileText, 
-              sub: activeProject ? `Harga: Rp ${activeProject.salaryConfig.priceBT}/berkas` : `${allProjects.length} Proyek Aktif`, 
+              sub: activeProject 
+                ? (kmUser?.role === 'bpn' ? 'Buku Tanah Terverifikasi' : `Tarif: Rp ${activeProject.salaryConfig.priceBT}/berkas`) 
+                : `${allProjects.length} Proyek Aktif`, 
               color: 'bg-blue-50', 
               iconColor: 'text-blue-600' 
             },
@@ -1026,7 +1292,9 @@ export default function App() {
               label: 'Surat Ukur (SU)', 
               value: (activeStats?.totalSU || 0).toLocaleString(), 
               icon: FileText, 
-              sub: activeProject ? `Harga: Rp ${activeProject.salaryConfig.priceSU}/berkas` : `Monitoring Real-time`, 
+              sub: activeProject 
+                ? (kmUser?.role === 'bpn' ? 'Surat Ukur Terverifikasi' : `Tarif: Rp ${activeProject.salaryConfig.priceSU}/berkas`) 
+                : `Monitoring Real-time`, 
               color: 'bg-emerald-50', 
               iconColor: 'text-emerald-600' 
             },
@@ -1400,14 +1668,16 @@ export default function App() {
                       <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1 italic">Kalkulasi Gaji Berdasarkan Produksi Berkas</p>
                     </div>
                     {activeProject && (
-                      <button
-                        onClick={handleExportToExcel}
-                        className="flex items-center justify-center gap-2 bg-[#28B8A6] hover:bg-teal-600 text-white font-black uppercase text-[11px] tracking-widest px-5 py-3 rounded-2xl shadow-lg shadow-[#28B8A6]/20 transition-all hover:scale-[1.02] self-start md:self-auto cursor-pointer"
-                        title="Ekspor Rekapitulasi Pembiayaan ke Excel (.xlsx)"
-                      >
-                        <FileSpreadsheet size={16} />
-                        Cetak XLSX
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={handleExportToExcel}
+                          className="flex items-center justify-center gap-2 bg-[#28B8A6] hover:bg-teal-600 text-white font-black uppercase text-[11px] tracking-widest px-5 py-3 rounded-2xl shadow-lg shadow-[#28B8A6]/20 transition-all hover:scale-[1.02] cursor-pointer"
+                          title="Ekspor Rekapitulasi Pembiayaan ke Excel (.xlsx)"
+                        >
+                          <FileSpreadsheet size={16} />
+                          Cetak XLSX
+                        </button>
+                      </div>
                     )}
                 </div>
                 
