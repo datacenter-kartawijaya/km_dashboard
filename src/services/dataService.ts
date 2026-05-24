@@ -217,7 +217,9 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
 
       if (isNewDetail && !isExistingDetail) {
         // We have detail (current op) vs recap (existing merged)
-        // Keep recap as base, but enrich with detail workData
+        // Keep recap as base, but enrich with detail workData.
+        // Since detail contains actual per-row verification logs, it is 100% accurate. 
+        // Overwrite the recap's values for these days to prevent recap totals (such as calculated weighted indexes like 8.6) from corrupting actual counts.
         const recapOp = merged[key];
         const detailOp = op;
         
@@ -226,16 +228,16 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
           if (idx === -1) {
             recapOp.workData.push(detailDay);
           } else {
-            // Take the max or safely merge counts
-            recapOp.workData[idx].bt = Math.max(recapOp.workData[idx].bt, detailDay.bt);
-            recapOp.workData[idx].su = Math.max(recapOp.workData[idx].su, detailDay.su);
+            recapOp.workData[idx].bt = detailDay.bt;
+            recapOp.workData[idx].su = detailDay.su;
             recapOp.workData[idx].isPresent = recapOp.workData[idx].isPresent || detailDay.isPresent;
           }
         });
         if (detailOp.shift !== Shift.NONE) recapOp.shift = detailOp.shift;
       } else if (!isNewDetail && isExistingDetail) {
         // We have recap (current op) vs detail (existing merged)
-        // Keep detail as base, but merge recap workData into it
+        // Keep detail as base, but merge recap workData into it.
+        // Since detail has the precise per-row log counts, we must NOT let the recap totals override or corrupt them.
         const recapOp = op;
         const detailOp = merged[key];
         
@@ -244,9 +246,7 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
           if (idx === -1) {
             detailOp.workData.push(recapDay);
           } else {
-            detailOp.workData[idx].bt = Math.max(detailOp.workData[idx].bt, recapDay.bt);
-            detailOp.workData[idx].su = Math.max(detailOp.workData[idx].su, recapDay.su);
-            detailOp.workData[idx].isPresent = detailOp.workData[idx].isPresent || recapDay.isPresent;
+            // Do not override! Keep detail's actual counts.
           }
         });
         
@@ -638,6 +638,7 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
   const normalizedHeaders: string[] = [];
   let currentMonthIndex = 0;
   let prevDayNum = -1;
+  const validDailyCols = new Set<number>();
 
   for (let col = 0; col < headers.length; col++) {
     const rawLabel = (headers[col] || "").trim();
@@ -645,6 +646,17 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
       normalizedHeaders.push("");
       continue;
     }
+
+    const rawLabelUpper = rawLabel.toUpperCase();
+    const dayNumVal = parseInt(rawLabel);
+    const isDayNumber = /^\d+$/.test(rawLabel) && dayNumVal >= 1 && dayNumVal <= 32;
+
+    const hasDateDelims = rawLabel.includes("/") || rawLabel.includes("-");
+    const hasDateWords = rawLabelUpper.includes("JAN") || rawLabelUpper.includes("FEB") || rawLabelUpper.includes("MAR") || rawLabelUpper.includes("APR") || rawLabelUpper.includes("MEI") || rawLabelUpper.includes("MAY") || rawLabelUpper.includes("JUN") || rawLabelUpper.includes("JUL") || rawLabelUpper.includes("AGU") || rawLabelUpper.includes("AUG") || rawLabelUpper.includes("SEP") || rawLabelUpper.includes("OKT") || rawLabelUpper.includes("OCT") || rawLabelUpper.includes("NOV") || rawLabelUpper.includes("DES") || rawLabelUpper.includes("DEC");
+    const cleanDigits = rawLabel.replace(/[^0-9]/g, "");
+    const isDateString = (hasDateDelims && cleanDigits.length >= 4) || (hasDateWords && cleanDigits.length >= 1);
+
+    const isDailyCol = isDayNumber || isDateString;
 
     const dayNumMatch = rawLabel.match(/^\d+$/);
     if (dayNumMatch && monthsFound.length > 0) {
@@ -661,8 +673,12 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
       const activeMonthYear = monthsFound[currentMonthIndex];
       const label = `${dayNum} ${activeMonthYear.month} ${activeMonthYear.year}`;
       normalizedHeaders.push(normalizeDateString(label));
+      validDailyCols.add(col);
     } else {
       normalizedHeaders.push(rawLabel);
+      if (isDailyCol) {
+        validDailyCols.add(col);
+      }
     }
   }
 
@@ -710,6 +726,11 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
       const cellVal = (row[col] || "").trim();
       const h = (headers[col] || "").trim().toUpperCase();
       if (!h || h === "TOTAL" || h === "JUMLAH" || h === "KETERANGAN") break;
+
+      // Only parse if this column is marked as a valid daily/date column
+      if (!validDailyCols.has(col)) {
+        continue;
+      }
 
       const cleanVal = cellVal.replace(/[^0-9,.]/g, '').replace(/,/g, '.');
       const count = isNaN(parseFloat(cleanVal)) ? 0 : parseFloat(cleanVal);
