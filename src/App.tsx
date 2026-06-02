@@ -921,7 +921,7 @@ export default function App() {
       <nav className="space-y-1 px-2">
         {[
           { id: 'overview', label: 'Monitor Proyek', icon: Activity },
-          { id: 'personnel', label: 'Absensi & Kinerja', icon: Users },
+          kmUser && kmUser.role !== 'bpn' && { id: 'personnel', label: 'Absensi & Kinerja', icon: Users },
           kmUser && kmUser.role !== 'bpn' && { id: 'finance', label: 'Rekap Gaji', icon: Wallet },
         ].filter(Boolean).map((item: any) => (
           <button 
@@ -1406,7 +1406,7 @@ export default function App() {
             </>
             )}
 
-            {currentView === 'personnel' && (
+            {currentView === 'personnel' && kmUser?.role !== 'bpn' && (
               <div className="space-y-6">
                  {/* Title and Search Row */}
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1827,7 +1827,7 @@ export default function App() {
       </div>
 
       {/* Ledger */}
-      {currentView === 'overview' && (
+      {currentView === 'overview' && kmUser?.role !== 'bpn' && (
         <div className="space-y-6">
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
             <div className="max-w-xl">
