@@ -62,6 +62,12 @@ CREATE POLICY "Allow public read access" ON public.km_operator_targets FOR SELEC
 CREATE POLICY "Allow public insert" ON public.km_operator_targets FOR INSERT WITH CHECK (true);
 CREATE POLICY "Allow public update" ON public.km_operator_targets FOR UPDATE USING (true);
 CREATE POLICY "Allow public delete" ON public.km_operator_targets FOR DELETE USING (true);
+
+-- 4. Supabase API Grant Permissions (Required for projects post-May 30, 2026)
+-- Grant necessary privileges to the API consumer roles (anon, authenticated, service_role)
+GRANT ALL ON TABLE public.km_projects TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.km_users TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.km_operator_targets TO anon, authenticated, service_role;
 `;
 
 console.log(
