@@ -128,10 +128,22 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
             upperName === "SETTING" || 
             upperName === "SETTINGS" || 
             upperName === "MASTER OPERATOR" || 
+            upperName === "MASTER OPERATORS" || 
             upperName === "MASTER" || 
             upperName === "DASHBOARD" || 
+            upperName === "DASHBOARDS" || 
+            upperName === "REKAP" || 
+            upperName === "LAPORAN" || 
+            upperName === "SUMMARY" || 
+            upperName === "DATABASE" || 
             upperName.includes("TEMPL") || 
-            upperName.includes("CHART")
+            upperName.includes("CHART") || 
+            upperName.includes("GUIDE") || 
+            upperName.includes("BANTUAN") || 
+            upperName.includes("LOG") || 
+            upperName.includes("PROVINSI") || 
+            upperName.includes("JAWA TIMUR") || 
+            upperName.includes("KANWIL")
           ) {
             return;
           }
@@ -566,6 +578,30 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
 }
 
 function parseRecapCSV(lines: string[][]): OperatorRecord[] {
+  // Check if this sheet is actually a land right database/master sheet instead of an operator attendance/recap sheet.
+  // Land right master sheets contain very specific column names like KANTAH, TIPE HAK, NIB, etc.
+  let isLandRightMaster = false;
+  let landRightColCount = 0;
+  const landRightKeywords = ["KANTAH", "KANWIL", "TIPE HAK", "PEMEGANG HAK", "NIB", "NOMOR HAK", "NOMOR SU/GD", "USER VERIFIKASI"];
+  
+  for (let i = 0; i < Math.min(lines.length, 15); i++) {
+    const row = (lines[i] || []).map(c => (c || "").trim().toUpperCase());
+    for (const kw of landRightKeywords) {
+      if (row.some(cell => cell === kw || cell.includes(kw))) {
+        landRightColCount++;
+      }
+    }
+    if (landRightColCount >= 2) {
+      isLandRightMaster = true;
+      break;
+    }
+  }
+
+  if (isLandRightMaster) {
+    console.log("[dataService] Skipping sheet because it is identified as a Land Right Master database (contains land keywords).");
+    return [];
+  }
+
   let headerRowIndex = -1;
   let opColIdx = -1;
 
@@ -762,6 +798,27 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
     if (name === "" || name === "0" || isNumericName) continue;
     // Skip repeated headers
     if (upperName === "NAMA" || upperName === "OPERATOR") continue;
+
+    // Skip rows that are clearly metadata, regional names, or office names (not operator/person names)
+    const upperNameClean = upperName.replace(/[^A-Z\s]/g, "").trim();
+    const isBlacklisted = [
+      "JAWA TIMUR",
+      "KANWIL",
+      "KANTAH",
+      "WILAYAH",
+      "KECAMATAN",
+      "KELURAHAN",
+      "DESA",
+      "KABUPATEN",
+      "BPN",
+      "PROVINSI",
+      "KOTA",
+      "KEMENTERIAN",
+      "AGRARIA",
+      "PERTANAHAN"
+    ].some(term => upperNameClean === term || upperNameClean.includes(term));
+    
+    if (isBlacklisted) continue;
 
     let shift = Shift.NONE;
     let status = Status.ACTIVE;
