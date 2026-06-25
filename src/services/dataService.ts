@@ -582,17 +582,31 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
     }
   }
 
-  // 1. Search for headers with high flexibility
+  // 1. Search for headers with high flexibility, prioritizing explicit name terms over generic operator roles
   for (let i = 0; i < Math.min(lines.length, 60); i++) {
     const row = lines[i].map(c => (c || "").trim().toUpperCase());
     
-    const foundIdx = row.findIndex(c => 
-      c === "OPERATOR" || 
+    // Priority A: Direct and explicit name columns to avoid matching operator IDs
+    let foundIdx = row.findIndex(c => 
       c === "NAMA" || 
+      c === "NAMA OPERATOR" || 
+      c === "NAMA PERSONIL" || 
+      c === "NAMA_OPERATOR" ||
       c === "PERSONIL" ||
-      c.includes("NAMA ") ||
-      c.includes(" OPERATOR")
+      c === "NAMA LENGKAP" ||
+      c === "NAMA_LENGKAP" ||
+      c === "OPERATOR NAME" ||
+      c === "OPERATOR_NAME"
     );
+    
+    // Priority B: Fallback to general operator column if explicit name column doesn't exist
+    if (foundIdx === -1) {
+      foundIdx = row.findIndex(c => 
+        c === "OPERATOR" || 
+        c.includes("NAMA ") ||
+        c.includes(" OPERATOR")
+      );
+    }
     
     if (foundIdx !== -1) {
       headerRowIndex = i;
@@ -632,6 +646,52 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
   if (headerRowIndex === -1 || opColIdx === -1) {
     headerRowIndex = 2; 
     opColIdx = 1;      
+  }
+
+  // 4. Dynamic Verification: If the matched column contains mostly numeric IDs (e.g. "201", "217"),
+  // but there is another column containing actual text names (e.g. "WISNU"), swap to the text name column.
+  if (headerRowIndex !== -1 && opColIdx !== -1) {
+    let numericCount = 0;
+    let totalNonEmpty = 0;
+    const startRow = headerRowIndex + 1;
+    const endRow = Math.min(lines.length, headerRowIndex + 25);
+    
+    for (let r = startRow; r < endRow; r++) {
+      const val = (lines[r][opColIdx] || "").trim();
+      if (val !== "" && val !== "0") {
+        totalNonEmpty++;
+        if (!isNaN(Number(val))) {
+          numericCount++;
+        }
+      }
+    }
+    
+    if (totalNonEmpty > 0 && (numericCount / totalNonEmpty) > 0.5) {
+      let bestTextCol = -1;
+      let maxTextPotential = 0;
+      
+      for (let c = 0; c < Math.min(10, (lines[headerRowIndex]?.length || 0)); c++) {
+        if (c === opColIdx) continue;
+        
+        let textPotential = 0;
+        for (let r = startRow; r < endRow; r++) {
+          const val = (lines[r][c] || "").trim();
+          if (val.length > 2 && isNaN(Number(val)) && !val.includes("/") && !val.includes(":") && !val.includes("202")) {
+            textPotential++;
+          }
+        }
+        
+        if (textPotential > maxTextPotential) {
+          maxTextPotential = textPotential;
+          bestTextCol = c;
+        }
+      }
+      
+      if (bestTextCol !== -1 && maxTextPotential >= 3) {
+        console.log(`[dataService] Column index ${opColIdx} contains mostly numeric values. Automatically swapped name column to column index ${bestTextCol} which contains actual text names.`);
+        opColIdx = bestTextCol;
+      }
+    }
   }
 
   const headers = lines[headerRowIndex] || [];
@@ -697,8 +757,9 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
     // Footers detection
     if (upperName === "TOTAL" || upperName === "JUMLAH" || upperName.includes("MENGETAHUI") || upperName.includes("DIBUAT OLEH")) break;
     
-    // Skip numbers or small codes in the name column
-    if (name === "" || name === "0" || (!isNaN(Number(name)) && name.length < 3)) continue;
+    // Skip numbers or small codes in the name column, or any names that are completely numeric/pure numbers
+    const isNumericName = /^\d+$/.test(name) || !isNaN(Number(name));
+    if (name === "" || name === "0" || isNumericName) continue;
     // Skip repeated headers
     if (upperName === "NAMA" || upperName === "OPERATOR") continue;
 
@@ -754,7 +815,8 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
 
     }
 
-    if (name.length > 2) {
+    const isNameNumeric = /^\d+$/.test(name) || !isNaN(Number(name));
+    if (name.length > 2 && !isNameNumeric) {
       operators.push({
         id: `op-${i}-${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
         name: name,
