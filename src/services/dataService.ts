@@ -608,11 +608,56 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
   // Extract month/year from Row 1 or 2 titles
   let monthContext = "";
   let monthsFound: { month: string; year: string }[] = [];
+
+  // Helper to generate full list of months chronologically between two months
+  function getMonthsRange(startMonthStr: string, startYearStr: string, endMonthStr: string, endYearStr: string): { month: string; year: string }[] {
+    const stdMonths = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    const mStart = stdMonths.indexOf(normalizeDateString(startMonthStr));
+    const mEnd = stdMonths.indexOf(normalizeDateString(endMonthStr));
+    const yStart = parseInt(startYearStr);
+    const yEnd = parseInt(endYearStr);
+
+    if (mStart === -1 || mEnd === -1 || isNaN(yStart) || isNaN(yEnd)) {
+      return [];
+    }
+
+    const range: { month: string; year: string }[] = [];
+    let currMonth = mStart;
+    let currYear = yStart;
+
+    while (currYear < yEnd || (currYear === yEnd && currMonth <= mEnd)) {
+      range.push({
+        month: stdMonths[currMonth],
+        year: currYear.toString()
+      });
+      currMonth++;
+      if (currMonth > 11) {
+        currMonth = 0;
+        currYear++;
+      }
+    }
+
+    return range;
+  }
+
   for (let i = 0; i < 3; i++) {
     const rowContent = (lines[i] || []).join(" ").toUpperCase();
     const mMatches = Array.from(rowContent.matchAll(/(JANUARI|FEBRUARI|MARET|APRIL|MEI|JUNI|JULI|AGUSTUS|SEPTEMBER|OKTOBER|NOVEMBER|DESEMBER|JANUARY|FEBRUARY|MARCH|MAY|JUNE|JULY|AUGUST|OCTOBER|DECEMBER|JAN|FEB|MAR|APR|MAI|JUN|JUL|AGU|AUG|SEP|OKT|OCT|NOV|DES|DEC)\s+(\d{4})/gi));
     if (mMatches.length > 0) {
-      monthsFound = mMatches.map(m => ({ month: normalizeDateString(m[1]), year: m[2] }));
+      if (mMatches.length >= 2) {
+        const startM = mMatches[0][1];
+        const startY = mMatches[0][2];
+        const endM = mMatches[mMatches.length - 1][1];
+        const endY = mMatches[mMatches.length - 1][2];
+        const range = getMonthsRange(startM, startY, endM, endY);
+        if (range.length > 0) {
+          monthsFound = range;
+        } else {
+          monthsFound = mMatches.map(m => ({ month: normalizeDateString(m[1]), year: m[2] }));
+        }
+      } else {
+        monthsFound = mMatches.map(m => ({ month: normalizeDateString(m[1]), year: m[2] }));
+      }
       monthContext = mMatches[0][1] + " " + mMatches[0][2];
       break;
     }
