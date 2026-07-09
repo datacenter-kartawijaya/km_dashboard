@@ -392,8 +392,11 @@ export default function App() {
                 const btState = colIndices.btStatus !== undefined ? (row[colIndices.btStatus] || "").toLowerCase() : "";
                 const suState = colIndices.suStatus !== undefined ? (row[colIndices.suStatus] || "").toLowerCase() : "";
 
-                const isBTVerified = btState.includes("verifikasi") || btState.includes("verif");
-                const isSUVerified = suState.includes("verifikasi") || suState.includes("verif");
+                const checkVerif = (v: string): boolean => {
+                  return (v.includes("verifikasi") || v.includes("verif")) && !v.includes("belum") && !v.includes("tidak");
+                };
+                const isBTVerified = checkVerif(btState);
+                const isSUVerified = checkVerif(suState);
 
                 if (!isBTVerified && !isSUVerified) continue;
 

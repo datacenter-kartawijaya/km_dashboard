@@ -163,6 +163,7 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
       if (tabs.length > 0) {
         tabs.forEach(tab => {
           const upperName = tab.name.toUpperCase().trim();
+          const isGenericSheet = /^SHEET\d+$/.test(upperName);
           // Skip setup, setting, master or irrelevant layout sheets
           if (
             upperName === "SETTING" || 
@@ -176,6 +177,8 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
             upperName === "LAPORAN" || 
             upperName === "SUMMARY" || 
             upperName === "DATABASE" || 
+            isGenericSheet ||
+            upperName.includes("BAHAN") ||
             upperName.includes("TEMPL") || 
             upperName.includes("CHART") || 
             upperName.includes("GUIDE") || 
@@ -235,7 +238,7 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
         return { data: [], status: { id: config.sheetName || "Excel", ok: false, message: "Akses Ditolak/Private" } };
       }
 
-      const operatorsFound = parseCSV(csvData);
+      const operatorsFound = parseCSV(csvData, config.sheetName);
       
       return {
         data: operatorsFound,
@@ -261,6 +264,9 @@ function cleanOperatorName(name: string): string {
   if (cleaned === "SATRIO ILHAM") {
     return "SATRIA ILHAM";
   }
+  if (cleaned === "ERIK") {
+    return "ERIC";
+  }
   return cleaned;
 }
 
@@ -278,7 +284,7 @@ function mergeRecapAndDetail(recapOp: OperatorRecord, detailOp: OperatorRecord):
       const detailPoints = B * 0.6 + S * 0.4;
       const recapCount = recapDay.bt; // In recap, both bt and su are initialized as the count
 
-      if (detailPoints > 0) {
+      if (detailPoints > 0 && recapCount > 0) {
         const k = recapCount / detailPoints;
         bt = Number((B * k).toFixed(1));
         su = Number((S * k).toFixed(1));
@@ -345,7 +351,7 @@ function mergeRecapAndDetail(recapOp: OperatorRecord, detailOp: OperatorRecord):
   return { data: Object.values(merged), statuses: allStatuses };
 }
 
-function parseCSV(csv: string): OperatorRecord[] {
+function parseCSV(csv: string, sheetName?: string | null): OperatorRecord[] {
   if (!csv || csv.trim() === "") return [];
 
   if (csv.toLowerCase().includes("<html") || csv.toLowerCase().includes("<!doctype")) {
@@ -382,8 +388,13 @@ function parseCSV(csv: string): OperatorRecord[] {
 
   const firstFewLines = lines.slice(0, 20).map(r => r.join(' ')).join(' ').toUpperCase();
   
-  if (firstFewLines.includes("LAPORAN OPERATOR") || firstFewLines.includes("LAPORAN VERIFIKASI")) {
-    return parseActivityLogCSV(lines);
+  const hasActivityKeywords = 
+    firstFewLines.includes("LAPORAN OPERATOR") || 
+    firstFewLines.includes("LAPORAN VERIFIKASI") || 
+    (firstFewLines.includes("TIPE HAK") && firstFewLines.includes("PEMEGANG HAK") && (firstFewLines.includes("VERIFIKASI") || firstFewLines.includes("TANGGAL PENGERJAAN")));
+
+  if (hasActivityKeywords) {
+    return parseActivityLogCSV(lines, sheetName);
   }
 
   return parseRecapCSV(lines);
@@ -406,7 +417,7 @@ function isValidDate(str: string): boolean {
   return /[0-9]/.test(cleaned);
 }
 
-function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
+function parseActivityLogCSV(lines: string[][], sheetName?: string | null): OperatorRecord[] {
   let operatorName = "UNKNOWN";
   
   for (const row of lines.slice(0, 10)) {
@@ -431,6 +442,10 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
       operatorName = afterToken.split(/\s{2,}/)[0].trim();
       break;
     }
+  }
+
+  if (operatorName === "UNKNOWN" && sheetName) {
+    operatorName = sheetName.toUpperCase().trim();
   }
 
   // Look for verified columns row-by-row (BT, SU) and dynamic Date columns (TANGGAL PENGERJAAN)
@@ -504,8 +519,12 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
       const row = lines[i];
       if (!row || row.length === 0) continue;
       
-      let isBT = btIdx !== -1 && (row[btIdx] || "").toLowerCase().includes("verifikasi");
-      let isSU = suIdx !== -1 && (row[suIdx] || "").toLowerCase().includes("verifikasi");
+      const checkVerif = (val: string): boolean => {
+        const v = (val || "").toLowerCase();
+        return (v.includes("verifikasi") || v.includes("verif")) && !v.includes("belum") && !v.includes("tidak");
+      };
+      let isBT = btIdx !== -1 && checkVerif(row[btIdx]);
+      let isSU = suIdx !== -1 && checkVerif(row[suIdx]);
       
       if (!isBT && !isSU) continue;
 
@@ -515,8 +534,6 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
           const rawDate = (row[tanggalVerifBTIdx] || "").trim();
           if (isValidDate(rawDate)) {
             btDateStr = rawDate;
-          } else {
-            isBT = false;
           }
         }
       }
@@ -527,8 +544,6 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
           const rawDate = (row[tanggalVerifSUIdx] || "").trim();
           if (isValidDate(rawDate)) {
             suDateStr = rawDate;
-          } else {
-            isSU = false;
           }
         }
       }
@@ -942,7 +957,10 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
       "KOTA",
       "KEMENTERIAN",
       "AGRARIA",
-      "PERTANAHAN"
+      "PERTANAHAN",
+      "BAHAN",
+      "BARANG",
+      "ALAT"
     ].some(term => upperNameClean === term || upperNameClean.includes(term));
     
     if (isBlacklisted) continue;
