@@ -85,6 +85,46 @@ export function normalizeDateString(dateStr: string): string {
   return cleaned;
 }
 
+/**
+ * Parse strings into floats safely, handling both Indonesian and standard English numeric formats.
+ * e.g., "1.250,5" -> 1250.5, "1,250.5" -> 1250.5, "42.486" -> 42486, "1199,4" -> 1199.4, "2.446,2" -> 2446.2.
+ */
+export function parseIndonesianNumber(val: string): number {
+  if (!val) return 0;
+  let cleaned = val.replace(/[^0-9,.]/g, '').trim();
+  if (cleaned === "" || cleaned === "-" || cleaned === "0") return 0;
+
+  const hasDot = cleaned.includes(".");
+  const hasComma = cleaned.includes(",");
+
+  if (hasDot && hasComma) {
+    const lastDotIdx = cleaned.lastIndexOf(".");
+    const lastCommaIdx = cleaned.lastIndexOf(",");
+    if (lastDotIdx > lastCommaIdx) {
+      // English style: 1,250.50 -> remove commas, keep dot
+      cleaned = cleaned.replace(/,/g, "");
+    } else {
+      // Indonesian style: 1.250,50 -> remove dots, replace comma with dot
+      cleaned = cleaned.replace(/\./g, "").replace(/,/g, ".");
+    }
+  } else if (hasComma) {
+    // Only has comma. In Indonesian sheets, comma is always a decimal separator.
+    cleaned = cleaned.replace(/,/g, ".");
+  } else if (hasDot) {
+    // Only has dot.
+    // If it's followed by exactly 3 digits at the end, it's highly likely a thousands separator (e.g., 1.262 or 42.486).
+    // Otherwise, it's a decimal point (e.g., 1.5 or 12.3456).
+    const parts = cleaned.split(".");
+    const lastPart = parts[parts.length - 1];
+    if (lastPart.length === 3) {
+      cleaned = cleaned.replace(/\./g, "");
+    }
+  }
+
+  const result = parseFloat(cleaned);
+  return isNaN(result) ? 0 : result;
+}
+
 export async function discoverWorkbookTabs(sheetUrl: string): Promise<{ name: string; gid: string }[]> {
   try {
     const { id } = extractSheetIdAndGid(sheetUrl);
@@ -216,11 +256,61 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
   const allData = results.flatMap(r => r.data);
   const allStatuses = results.map(r => r.status).filter(s => s.ok || results.length === 1);
 
+function cleanOperatorName(name: string): string {
+  let cleaned = name.toUpperCase().trim().replace(/\s+/g, " ");
+  if (cleaned === "SATRIO ILHAM") {
+    return "SATRIA ILHAM";
+  }
+  return cleaned;
+}
+
+function mergeRecapAndDetail(recapOp: OperatorRecord, detailOp: OperatorRecord): OperatorRecord {
+  const mergedWorkData: DayWork[] = recapOp.workData.map(recapDay => {
+    const detailDay = detailOp.workData.find(d => d.date === recapDay.date);
+    
+    let bt = recapDay.bt;
+    let su = recapDay.su;
+    let isPresent = recapDay.isPresent;
+
+    if (detailDay) {
+      const B = detailDay.bt;
+      const S = detailDay.su;
+      const detailPoints = B * 0.6 + S * 0.4;
+      const recapCount = recapDay.bt; // In recap, both bt and su are initialized as the count
+
+      if (detailPoints > 0) {
+        const k = recapCount / detailPoints;
+        bt = Number((B * k).toFixed(1));
+        su = Number((S * k).toFixed(1));
+      } else {
+        bt = recapCount;
+        su = recapCount;
+      }
+      isPresent = isPresent || detailDay.isPresent;
+    }
+
+    return {
+      date: recapDay.date,
+      bt,
+      su,
+      isPresent
+    };
+  });
+
+  return {
+    ...recapOp,
+    workData: mergedWorkData,
+    shift: detailOp.shift !== Shift.NONE ? detailOp.shift : recapOp.shift,
+    status: recapOp.status !== Status.ACTIVE ? recapOp.status : detailOp.status
+  };
+}
+
   // Merge data gracefully, prioritizing detailed logs while keeping shift/status from recap
   const merged: Record<string, OperatorRecord> = {};
   
   allData.forEach(op => {
-    const key = op.name.toUpperCase().trim();
+    const key = cleanOperatorName(op.name);
+    op.name = key; // Ensure consistent spelling of operator name
     if (!merged[key]) {
       merged[key] = op;
     } else {
@@ -229,41 +319,12 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
 
       if (isNewDetail && !isExistingDetail) {
         // We have detail (current op) vs recap (existing merged)
-        // Keep recap as base, but enrich with detail workData.
-        // Since detail contains actual per-row verification logs, it is 100% accurate. 
-        // Overwrite the recap's values for these days to prevent recap totals (such as calculated weighted indexes like 8.6) from corrupting actual counts.
-        const recapOp = merged[key];
-        const detailOp = op;
-        
-        detailOp.workData.forEach(detailDay => {
-          const idx = recapOp.workData.findIndex(d => d.date === detailDay.date);
-          if (idx === -1) {
-            recapOp.workData.push(detailDay);
-          } else {
-            recapOp.workData[idx].bt = detailDay.bt;
-            recapOp.workData[idx].su = detailDay.su;
-            recapOp.workData[idx].isPresent = recapOp.workData[idx].isPresent || detailDay.isPresent;
-          }
-        });
-        if (detailOp.shift !== Shift.NONE) recapOp.shift = detailOp.shift;
+        // Merge using our scaling helper where recap is existing and detail is current
+        merged[key] = mergeRecapAndDetail(merged[key], op);
       } else if (!isNewDetail && isExistingDetail) {
         // We have recap (current op) vs detail (existing merged)
-        // Keep detail as base, but merge recap workData into it.
-        // Since detail has the precise per-row log counts, we must NOT let the recap totals override or corrupt them.
-        const recapOp = op;
-        const detailOp = merged[key];
-        
-        recapOp.workData.forEach(recapDay => {
-          const idx = detailOp.workData.findIndex(d => d.date === recapDay.date);
-          if (idx === -1) {
-            detailOp.workData.push(recapDay);
-          } else {
-            // Do not override! Keep detail's actual counts.
-          }
-        });
-        
-        if (recapOp.shift !== Shift.NONE) detailOp.shift = recapOp.shift;
-        if (recapOp.status !== Status.ACTIVE) detailOp.status = recapOp.status;
+        // Merge using our scaling helper where recap is current and detail is existing
+        merged[key] = mergeRecapAndDetail(op, merged[key]);
       } else {
         // Identical types merge
         const existingWork = merged[key].workData;
@@ -547,7 +608,7 @@ function parseActivityLogCSV(lines: string[][]): OperatorRecord[] {
       let count = 0;
       const isDateString = totalStr.includes("/") || totalStr.includes("-") || totalStr.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/);
       if (totalStr && !isDateString) {
-        count = parseFloat(totalStr.replace(/[^0-9,.]/g, '').replace(',', '.')) || 0;
+        count = parseIndonesianNumber(totalStr);
       }
       if (count === 0 && (row[summaryTanggalIdx+1] === "" || !row[summaryTanggalIdx+1])) continue;
 
@@ -836,7 +897,28 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
     const upperName = name.toUpperCase();
 
     // Footers detection
-    if (upperName === "TOTAL" || upperName === "JUMLAH" || upperName.includes("MENGETAHUI") || upperName.includes("DIBUAT OLEH")) break;
+    const isFooter = 
+      upperName === "TOTAL" || 
+      upperName === "JUMLAH" || 
+      upperName.includes("TOTAL") || 
+      upperName.includes("JUMLAH") || 
+      upperName.includes("MENGETAHUI") || 
+      upperName.includes("DIBUAT OLEH") || 
+      upperName.includes("DISETUJUI") || 
+      upperName === "RATA-RATA" || 
+      upperName.includes("RATA-RATA") || 
+      upperName === "AVERAGE" || 
+      upperName.startsWith("AVERAGE") ||
+      upperName === "PERSENTASE" || 
+      upperName === "PERCENTAGE" || 
+      upperName === "PENCAPAIAN" || 
+      upperName === "TARGET" || 
+      upperName.startsWith("TARGET ") ||
+      upperName.startsWith("KETERANGAN") ||
+      upperName.includes("YANG MENYERAHKAN") ||
+      upperName.includes("YANG MENERIMA");
+
+    if (isFooter) break;
     
     // Skip numbers or small codes in the name column, or any names that are completely numeric/pure numbers
     const isNumericName = /^\d+$/.test(name) || !isNaN(Number(name));
@@ -895,8 +977,7 @@ function parseRecapCSV(lines: string[][]): OperatorRecord[] {
         continue;
       }
 
-      const cleanVal = cellVal.replace(/[^0-9,.]/g, '').replace(/,/g, '.');
-      const count = isNaN(parseFloat(cleanVal)) ? 0 : parseFloat(cleanVal);
+      const count = parseIndonesianNumber(cellVal);
       
       if (count > 0) foundAnyData = true;
 
