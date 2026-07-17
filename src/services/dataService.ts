@@ -177,6 +177,15 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
             upperName === "LAPORAN" || 
             upperName === "SUMMARY" || 
             upperName === "DATABASE" || 
+            upperName === "ABSENSI" || 
+            upperName === "PRESENSI" || 
+            upperName === "SUKAJADI" || 
+            upperName === "P.BENTENG" || 
+            upperName === "S.PINANG" || 
+            upperName === "KENTEN LAUT" || 
+            upperName === "PANGKALAN BENTENG" || 
+            upperName === "SUNGAI PINANG" || 
+            upperName === "BANYUASIN" || 
             isGenericSheet ||
             upperName.includes("BAHAN") ||
             upperName.includes("TEMPL") || 
