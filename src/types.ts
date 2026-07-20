@@ -40,6 +40,8 @@ export interface Project {
   salaryConfig: SalaryConfig;
   sheetIds: string[]; // Support multiple Google Sheet IDs
   targetPerDayOperator?: number; // Standard daily target for operators, default 150
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface DashboardStats {

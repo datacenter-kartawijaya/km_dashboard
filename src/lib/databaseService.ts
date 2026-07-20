@@ -145,7 +145,9 @@ export const databaseService = {
               targetTotal: d.targetTotal,
               targetPerDayOperator: d.targetPerDayOperator || 150,
               sheetIds: Array.isArray(d.sheetIds) ? d.sheetIds : JSON.parse(d.sheetIds || '[]'),
-              salaryConfig: typeof d.salaryConfig === 'object' ? d.salaryConfig : JSON.parse(d.salaryConfig || '{"priceBT": 1500, "priceSU": 1000}')
+              salaryConfig: typeof d.salaryConfig === 'object' ? d.salaryConfig : JSON.parse(d.salaryConfig || '{"priceBT": 1500, "priceSU": 1000}'),
+              startDate: d.startDate,
+              endDate: d.endDate
             })) as Project[];
           } else {
             // Auto seed initial projects if empty
@@ -157,7 +159,9 @@ export const databaseService = {
                 targetTotal: proj.targetTotal,
                 targetPerDayOperator: proj.targetPerDayOperator || 150,
                 sheetIds: proj.sheetIds,
-                salaryConfig: proj.salaryConfig
+                salaryConfig: proj.salaryConfig,
+                startDate: proj.startDate,
+                endDate: proj.endDate
               });
             }
             return initialProjects;
@@ -189,7 +193,9 @@ export const databaseService = {
             targetTotal: project.targetTotal,
             targetPerDayOperator: project.targetPerDayOperator || 150,
             sheetIds: project.sheetIds,
-            salaryConfig: project.salaryConfig
+            salaryConfig: project.salaryConfig,
+            startDate: project.startDate,
+            endDate: project.endDate
           });
 
         if (error) {

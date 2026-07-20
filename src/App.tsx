@@ -60,6 +60,40 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+function parseNormalizedDate(dateStr: string): Date {
+  if (!dateStr) return new Date(0);
+  const parts = dateStr.trim().split(" ");
+  if (parts.length === 3) {
+    const day = parseInt(parts[0]);
+    const monthStr = parts[1].toUpperCase();
+    let year = parseInt(parts[2]);
+    if (year < 100) {
+      year += 2000;
+    }
+    
+    const monthMap: Record<string, number> = {
+      JAN: 0, JANUARI: 0, JANUARY: 0,
+      FEB: 1, FEBRUARI: 1, FEBRUARY: 1,
+      MAR: 2, MARET: 2, MARCH: 2,
+      APR: 3, APRIL: 3,
+      MEI: 4, MAI: 4, MAY: 4,
+      JUN: 5, JUNI: 5, JUNE: 5,
+      JUL: 6, JULI: 6, JULY: 6,
+      AGU: 7, AUG: 7, AGUSTUS: 7, AUGUST: 7,
+      SEP: 8, SEPTEMBER: 8,
+      OKT: 9, OCT: 9, OKTOBER: 9, OCTOBER: 9,
+      NOV: 10, NOP: 10, NOVEMBER: 10,
+      DES: 11, DEC: 11, DESEMBER: 11, DECEMBER: 11
+    };
+    
+    const month = monthMap[monthStr];
+    if (month !== undefined && !isNaN(day)) {
+      return new Date(year, month, day);
+    }
+  }
+  return new Date(0);
+}
+
 const COLORS = ['#28B8A6', '#10B981', '#F59E0B', '#EF4444'];
 
 export default function App() {
@@ -775,22 +809,30 @@ export default function App() {
     
     targetOps.forEach(op => {
       op.workData.forEach(d => {
-        if (!dateMap[d.date]) {
-          dateMap[d.date] = { bt: 0, su: 0, total: 0 };
+        if (d.date && d.date !== "Tanpa Tanggal" && d.date !== "UNKNOWN") {
+          if (!dateMap[d.date]) {
+            dateMap[d.date] = { bt: 0, su: 0, total: 0 };
+          }
+          dateMap[d.date].bt += d.bt;
+          dateMap[d.date].su += d.su;
+          dateMap[d.date].total += (d.bt * 0.6 + d.su * 0.4);
         }
-        dateMap[d.date].bt += d.bt;
-        dateMap[d.date].su += d.su;
-        dateMap[d.date].total += (d.bt * 0.6 + d.su * 0.4);
       });
     });
 
-    return Object.keys(dateMap).map(date => ({
+    const parsedData = Object.keys(dateMap).map(date => ({
       date,
       bt: Number(dateMap[date].bt.toFixed(1)),
       su: Number(dateMap[date].su.toFixed(1)),
       total: Number(dateMap[date].total.toFixed(1))
-    })).slice(0, 32);
-  }, [operators]);
+    }));
+
+    parsedData.sort((a, b) => {
+      return parseNormalizedDate(a.date).getTime() - parseNormalizedDate(b.date).getTime();
+    });
+
+    return parsedData;
+  }, [operators, allOperatorsData, activeProject]);
 
   const filteredOperators = useMemo(() => {
     return operators.filter(op => {
@@ -810,43 +852,59 @@ export default function App() {
         }
       });
     });
-    const arr = Array.from(datesSet);
-    
-    const parseNormalizedDate = (dateStr: string): Date => {
-      const parts = dateStr.split(" ");
-      if (parts.length === 3) {
-        const day = parseInt(parts[0]);
-        const monthStr = parts[1].toUpperCase();
-        const year = parseInt(parts[2]);
-        
-        const monthMap: Record<string, number> = {
-          JAN: 0, JANUARI: 0, JANUARY: 0,
-          FEB: 1, FEBRUARI: 1, FEBRUARY: 1,
-          MAR: 2, MARET: 2, MARCH: 2,
-          APR: 3, APRIL: 3,
-          MEI: 4, MAI: 4, MAY: 4,
-          JUN: 5, JUNI: 5, JUNE: 5,
-          JUL: 6, JULI: 6, JULY: 6,
-          AGU: 7, AUG: 7, AGUSTUS: 7, AUGUST: 7,
-          SEP: 8, SEPTEMBER: 8,
-          OKT: 9, OCT: 9, OKTOBER: 9, OCTOBER: 9,
-          NOV: 10, NOP: 10, NOVEMBER: 10,
-          DES: 11, DEC: 11, DESEMBER: 11, DECEMBER: 11
-        };
-        
-        const month = monthMap[monthStr];
-        if (month !== undefined) {
-          return new Date(year, month, day);
+    const parsedDatesArray = Array.from(datesSet);
+
+    if (parsedDatesArray.length === 0) return [];
+
+    let minDate: Date | null = null;
+    let maxDate: Date | null = null;
+
+    parsedDatesArray.forEach(dateStr => {
+      const parsed = parseNormalizedDate(dateStr);
+      if (parsed.getTime() > 0) {
+        if (!minDate || parsed < minDate) minDate = parsed;
+        if (!maxDate || parsed > maxDate) maxDate = parsed;
+      }
+    });
+
+    if (activeProject) {
+      if (activeProject.startDate) {
+        const parts = activeProject.startDate.split("-");
+        if (parts.length === 3) {
+          minDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
         }
       }
-      return new Date(0);
-    };
+      if (activeProject.endDate) {
+        const parts = activeProject.endDate.split("-");
+        if (parts.length === 3) {
+          maxDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        }
+      }
+    }
 
-    arr.sort((a, b) => {
-      return parseNormalizedDate(a).getTime() - parseNormalizedDate(b).getTime();
-    });
-    return arr;
-  }, [operators]);
+    if (!minDate || !maxDate) {
+      parsedDatesArray.sort((a, b) => parseNormalizedDate(a).getTime() - parseNormalizedDate(b).getTime());
+      return parsedDatesArray;
+    }
+
+    const consecutiveDates: string[] = [];
+    const months = ["JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AUG", "SEP", "OKT", "NOV", "DES"];
+    
+    const current = new Date(minDate.getTime());
+    current.setHours(12, 0, 0, 0);
+    const end = new Date(maxDate.getTime());
+    end.setHours(12, 0, 0, 0);
+
+    while (current <= end) {
+      const day = current.getDate();
+      const monthStr = months[current.getMonth()];
+      const year = current.getFullYear();
+      consecutiveDates.push(`${day} ${monthStr} ${year}`);
+      current.setDate(current.getDate() + 1);
+    }
+
+    return consecutiveDates;
+  }, [operators, activeProject]);
 
   const workByDate = useMemo(() => {
     const map: Record<string, Record<string, typeof operators[0]['workData'][0]>> = {};

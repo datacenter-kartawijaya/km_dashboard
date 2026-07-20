@@ -19,7 +19,9 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({ isOpen, onClose, onS
     targetPerDayOperator: 150,
     sheetIds: [''],
     priceBT: 1500,
-    priceSU: 1000
+    priceSU: 1000,
+    startDate: '',
+    endDate: ''
   });
 
   useEffect(() => {
@@ -31,7 +33,9 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({ isOpen, onClose, onS
         targetPerDayOperator: project.targetPerDayOperator || 150,
         sheetIds: project.sheetIds && project.sheetIds.length > 0 ? project.sheetIds : [''],
         priceBT: project.salaryConfig.priceBT,
-        priceSU: project.salaryConfig.priceSU
+        priceSU: project.salaryConfig.priceSU,
+        startDate: project.startDate || '',
+        endDate: project.endDate || ''
       });
     } else {
       setFormData({
@@ -41,7 +45,9 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({ isOpen, onClose, onS
         targetPerDayOperator: 150,
         sheetIds: [''],
         priceBT: 1500,
-        priceSU: 1000
+        priceSU: 1000,
+        startDate: '',
+        endDate: ''
       });
     }
   }, [project, isOpen]);
@@ -77,7 +83,9 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({ isOpen, onClose, onS
       salaryConfig: {
         priceBT: formData.priceBT,
         priceSU: formData.priceSU
-      }
+      },
+      startDate: formData.startDate || undefined,
+      endDate: formData.endDate || undefined
     };
     onSave(updatedProject);
     onClose();
@@ -182,6 +190,31 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({ isOpen, onClose, onS
                       value={formData.targetPerDayOperator}
                       onChange={(e) => setFormData({ ...formData, targetPerDayOperator: parseInt(e.target.value) || 0 })}
                       className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-5 py-3 text-sm focus:ring-4 focus:ring-[#28B8A6]/10 outline-none transition-all font-mono font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                      Tanggal Mulai Proyek (Opsional)
+                    </label>
+                    <input
+                      type="date"
+                      value={formData.startDate}
+                      onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-5 py-3 text-sm focus:ring-4 focus:ring-[#28B8A6]/10 outline-none transition-all font-semibold"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                      Tanggal Selesai Proyek (Opsional)
+                    </label>
+                    <input
+                      type="date"
+                      value={formData.endDate}
+                      onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-5 py-3 text-sm focus:ring-4 focus:ring-[#28B8A6]/10 outline-none transition-all font-semibold"
                     />
                   </div>
                 </div>

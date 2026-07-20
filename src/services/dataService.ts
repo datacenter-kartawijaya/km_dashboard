@@ -16,7 +16,9 @@ export const PROJECTS: Project[] = [
     salaryConfig: {
       priceBT: 1500,
       priceSU: 1000
-    }
+    },
+    startDate: "2026-06-18",
+    endDate: "2026-08-30"
   }
 ];
 
@@ -50,11 +52,59 @@ export function normalizeDateString(dateStr: string): string {
   const parts = cleaned.split(/[\/\-]/);
   if (parts.length === 3) {
     const day = parseInt(parts[0]);
-    const month = parseInt(parts[1]);
-    const year = parts[2];
+    let month = parseInt(parts[1]);
+    let year = parts[2].trim();
+
+    if (isNaN(day)) {
+      return "UNKNOWN";
+    }
+
+    if (year.length === 2) {
+      year = "20" + year;
+    } else if (year.length === 5 && year.startsWith("202")) {
+      if (year.endsWith("6")) {
+        year = "2026";
+      } else {
+        year = year.substring(0, 4);
+      }
+    } else if (year.length > 4) {
+      year = year.substring(0, 4);
+    }
+
+    let yearNum = parseInt(year);
+    if (!isNaN(yearNum)) {
+      yearNum = 2026; // Force all project years to 2026 to correct Excel/Google Sheets auto-fill drag typos
+      year = "2026";
+    }
+
+    const monthsMap: Record<string, number> = {
+      "JAN": 1, "JANUARI": 1, "JANUARY": 1,
+      "FEB": 2, "FEBRUARI": 2, "FEBRUARY": 2,
+      "MAR": 3, "MARET": 3, "MARCH": 3,
+      "APR": 4, "APRIL": 4,
+      "MEI": 5, "MAI": 5, "MAY": 5,
+      "JUN": 6, "JUNI": 6, "JUNE": 6,
+      "JUL": 7, "JULI": 7, "JULY": 7,
+      "AGU": 8, "AUG": 8, "AGUSTUS": 8, "AUGUST": 8,
+      "SEP": 9, "SEPTEMBER": 9,
+      "OKT": 10, "OCT": 10, "OKTOBER": 10, "OCTOBER": 10,
+      "NOV": 11, "NOVEMBER": 11,
+      "DES": 12, "DEC": 12, "DESEMBER": 12, "DECEMBER": 12
+    };
+
+    if (isNaN(month)) {
+      const monthUpper = parts[1].toUpperCase().trim();
+      month = monthsMap[monthUpper] || NaN;
+    }
+
+    if (isNaN(month) || month < 1 || month > 12) {
+      return "UNKNOWN";
+    }
+
     const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-    const monthStr = months[month - 1] || `${month}`;
+    const monthStr = months[month - 1] || `${parts[1]}`;
     cleaned = `${day} ${monthStr} ${year}`;
+    return cleaned;
   }
 
   // Normalize Indonesian Month Names
@@ -81,6 +131,9 @@ export function normalizeDateString(dateStr: string): string {
   cleaned = cleaned.replace(/\bOCTOBER\b/g, "OCT");
   cleaned = cleaned.replace(/\bNOVEMBER\b/g, "NOV");
   cleaned = cleaned.replace(/\bDECEMBER\b/g, "DEC");
+
+  // Enforce year 2026 for all dates to correct user drag-increment-year typos
+  cleaned = cleaned.replace(/\b20\d{2}\b/g, "2026");
 
   return cleaned;
 }
@@ -177,8 +230,6 @@ export async function fetchAllSheetsData(sheetIds: string[]): Promise<FetchResul
             upperName === "LAPORAN" || 
             upperName === "SUMMARY" || 
             upperName === "DATABASE" || 
-            upperName === "ABSENSI" || 
-            upperName === "PRESENSI" || 
             upperName === "SUKAJADI" || 
             upperName === "P.BENTENG" || 
             upperName === "S.PINANG" || 
@@ -562,9 +613,6 @@ function parseActivityLogCSV(lines: string[][], sheetName?: string | null): Oper
       let fallbackDateStr = "UNKNOWN";
       if (dateIdx !== -1 && row[dateIdx] && (row[dateIdx] || "").trim() !== "") {
         fallbackDateStr = (row[dateIdx] || "").trim();
-      } else {
-        const dMatch = row.find(c => c && c.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/));
-        if (dMatch) fallbackDateStr = dMatch.trim();
       }
 
       if (isBT) {
