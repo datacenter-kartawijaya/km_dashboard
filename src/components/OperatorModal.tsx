@@ -42,8 +42,8 @@ export function OperatorModal({ operator, isOpen, onClose, onSaveTarget }: Opera
 
   if (!operator) return null;
 
-  const totalBT = operator.workData.reduce((acc, d) => acc + d.bt, 0);
-  const totalSU = operator.workData.reduce((acc, d) => acc + d.su, 0);
+  const totalBT = Number(operator.workData.reduce((acc, d) => acc + d.bt, 0).toFixed(1));
+  const totalSU = Number(operator.workData.reduce((acc, d) => acc + d.su, 0).toFixed(1));
   const totalProduction = Number((totalBT * 0.6 + totalSU * 0.4).toFixed(1));
   const daysPresent = operator.workData.filter(d => d.isPresent).length;
   const totalDays = operator.workData.length;
@@ -271,8 +271,8 @@ export function OperatorModal({ operator, isOpen, onClose, onSaveTarget }: Opera
                                  <span className="text-xs font-bold text-gray-700 tracking-tight">{day.date}</span>
                               </div>
                               <div className="flex items-center gap-4 text-[10px] font-black">
-                                 <span className="text-blue-600">BT: {day.bt}</span>
-                                 <span className="text-emerald-600">SU: {day.su}</span>
+                                 <span className="text-blue-600">BT: {Number(day.bt.toFixed(1))}</span>
+                                 <span className="text-emerald-600">SU: {Number(day.su.toFixed(1))}</span>
                                  <span className="bg-white px-2 py-1 rounded-lg shadow-sm">TOTAL: {Number((day.bt * 0.6 + day.su * 0.4).toFixed(1))}</span>
                               </div>
                            </div>

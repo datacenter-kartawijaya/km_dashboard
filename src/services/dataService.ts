@@ -342,15 +342,15 @@ function mergeRecapAndDetail(recapOp: OperatorRecord, detailOp: OperatorRecord):
       const B = detailDay.bt;
       const S = detailDay.su;
       const detailPoints = B * 0.6 + S * 0.4;
-      const recapCount = recapDay.bt; // In recap, both bt and su are initialized as the count
+      const recapPoints = (recapDay.bt * 0.6) + (recapDay.su * 0.4);
 
-      if (detailPoints > 0 && recapCount > 0) {
-        const k = recapCount / detailPoints;
+      if (detailPoints > 0 && recapPoints > 0) {
+        const k = recapPoints / detailPoints;
         bt = Number((B * k).toFixed(1));
         su = Number((S * k).toFixed(1));
-      } else {
-        bt = recapCount;
-        su = recapCount;
+      } else if (detailPoints > 0) {
+        bt = B;
+        su = S;
       }
       isPresent = isPresent || detailDay.isPresent;
     }
@@ -449,12 +449,12 @@ function parseCSV(csv: string, sheetName?: string | null): OperatorRecord[] {
   const firstFewLines = lines.slice(0, 20).map(r => r.join(' ')).join(' ').toUpperCase();
   
   const hasActivityKeywords = 
-    firstFewLines.includes("LAPORAN OPERATOR") || 
-    firstFewLines.includes("LAPORAN VERIFIKASI") || 
-    (firstFewLines.includes("TIPE HAK") && firstFewLines.includes("PEMEGANG HAK") && (firstFewLines.includes("VERIFIKASI") || firstFewLines.includes("TANGGAL PENGERJAAN")));
+    firstFewLines.includes("LAPORAN OPERATOR:") || 
+    (firstFewLines.includes("TIPE HAK") && firstFewLines.includes("PEMEGANG HAK") && (firstFewLines.includes("STATUS BT") || firstFewLines.includes("TANGGAL PENGERJAAN")));
 
   if (hasActivityKeywords) {
-    return parseActivityLogCSV(lines, sheetName);
+    const res = parseActivityLogCSV(lines, sheetName);
+    if (res.length > 0) return res;
   }
 
   return parseRecapCSV(lines);

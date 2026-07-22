@@ -757,6 +757,9 @@ export default function App() {
       });
     });
 
+    totalBT = Number(totalBT.toFixed(1));
+    totalSU = Number(totalSU.toFixed(1));
+
     const totalVerified = Number((totalBT * 0.6 + totalSU * 0.4).toFixed(1));
     const projectBudget = project ? (totalBT * project.salaryConfig.priceBT) + (totalSU * project.salaryConfig.priceSU) : 0;
     const completionRate = project ? (totalVerified / project.targetTotal) * 100 : 0;
@@ -1754,8 +1757,8 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-gray-50 font-mono">
                         {(activeProject ? operators : []).map((op) => {
-                          const opBT = op.workData.reduce((acc, d) => acc + d.bt, 0);
-                          const opSU = op.workData.reduce((acc, d) => acc + d.su, 0);
+                          const opBT = Number(op.workData.reduce((acc, d) => acc + d.bt, 0).toFixed(1));
+                          const opSU = Number(op.workData.reduce((acc, d) => acc + d.su, 0).toFixed(1));
                           const btPay = opBT * (activeProject?.salaryConfig.priceBT || 0);
                           const suPay = opSU * (activeProject?.salaryConfig.priceSU || 0);
                           const total = btPay + suPay;
@@ -1768,7 +1771,7 @@ export default function App() {
                             >
                               <td className="py-5 px-4">
                                 <p className="text-sm font-black text-gray-900 group-hover:text-[#28B8A6] transition-colors tracking-tighter">{op.name}</p>
-                                <p className="text-[10px] font-bold text-gray-400 uppercase">VOL: {opBT + opSU}</p>
+                                <p className="text-[10px] font-bold text-gray-400 uppercase">VOL: {Number((opBT + opSU).toFixed(1))}</p>
                               </td>
                               <td className="py-5 px-4">
                                 <p className="text-[11px] font-black text-blue-500">{formatCurrency(btPay)}</p>
@@ -1939,8 +1942,8 @@ export default function App() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {filteredOperators.map((op, i) => {
-                    const opBT = op.workData.reduce((acc, d) => acc + d.bt, 0);
-                    const opSU = op.workData.reduce((acc, d) => acc + d.su, 0);
+                    const opBT = Number(op.workData.reduce((acc, d) => acc + d.bt, 0).toFixed(1));
+                    const opSU = Number(op.workData.reduce((acc, d) => acc + d.su, 0).toFixed(1));
                     const opSalary = activeProject 
                       ? (opBT * activeProject.salaryConfig.priceBT) + (opSU * activeProject.salaryConfig.priceSU)
                       : 0;
